@@ -1185,6 +1185,7 @@ void drawCombined() {
 // Draw visual Radar screen with rotating sweep line & RSSI distance blips
 void drawRadar() {
   canvas.fillScreen(FIX_BLACK);
+  canvas.setTextWrap(false); // Prevent text wrapping around to left side
   drawHeader(FIX_GREEN, "RADAR");
 
   static float radarSweepAngle = 0.0f;
@@ -1218,7 +1219,7 @@ void drawRadar() {
     uint8_t mac[6];
     int rssi;
     float dist;
-    char label[12];
+    char label[16];
     uint16_t color;
     bool isAP;
   };
@@ -1234,9 +1235,9 @@ void drawRadar() {
       item.dist = pow(10.0f, (-40.0f - (float)item.rssi) / 27.0f);
       item.isAP = true;
       if (strlen(trackedAPs[i].ssid) > 0) {
-        snprintf(item.label, sizeof(item.label), "%.6s", trackedAPs[i].ssid);
+        snprintf(item.label, sizeof(item.label), "%.12s", trackedAPs[i].ssid);
       } else {
-        snprintf(item.label, sizeof(item.label), "%02X%02X", item.mac[4], item.mac[5]);
+        snprintf(item.label, sizeof(item.label), "%02X%02X%02X", item.mac[3], item.mac[4], item.mac[5]);
       }
       item.color = FIX_YELLOW; // Yellow for Access Points
     }
@@ -1251,10 +1252,10 @@ void drawRadar() {
       item.dist = pow(10.0f, (-40.0f - (float)item.rssi) / 27.0f);
       item.isAP = false;
       if (strlen(trackedClients[i].probedSSID) > 0) {
-        snprintf(item.label, sizeof(item.label), "%.6s", trackedClients[i].probedSSID);
+        snprintf(item.label, sizeof(item.label), "%.12s", trackedClients[i].probedSSID);
       } else {
         const char* vendor = getVendor(item.mac);
-        snprintf(item.label, sizeof(item.label), "%.6s", vendor);
+        snprintf(item.label, sizeof(item.label), "%.12s", vendor);
       }
       item.color = (item.rssi > -60) ? FIX_GREEN : ((item.rssi > -80) ? FIX_CYAN : FIX_RED);
     }
@@ -1286,23 +1287,32 @@ void drawRadar() {
     }
   }
 
-  // Right Side Data Panel: Header & top 4 devices
-  canvas.setCursor(86, 20);
+  // Right Side Data Panel: Clean 2-Line Item Header & Top 4 Devices
+  canvas.setCursor(85, 18);
   canvas.setTextColor(FIX_CYAN);
-  canvas.print("CLR DIST MAC");
-  canvas.drawFastHLine(86, 30, 74, FIX_GRAY);
+  canvas.print("TARGETS");
+  canvas.setCursor(130, 18);
+  canvas.setTextColor(FIX_GRAY);
+  canvas.print("DIST");
+  canvas.drawFastHLine(85, 27, 75, FIX_GRAY);
 
-  int yPos = 34;
+  int yPos = 30;
   for (int i = 0; i < totalCount && i < 4; i++) {
-    // Blip color indicator (Circle outline for AP, Solid rect for Client)
+    // Line 1: Indicator shape + Type tag + Distance
     if (items[i].isAP) {
-      canvas.drawCircle(88, yPos + 4, 3, items[i].color);
+      canvas.drawCircle(87, yPos + 3, 2, items[i].color);
+      canvas.setCursor(93, yPos);
+      canvas.setTextColor(FIX_YELLOW);
+      canvas.print("AP");
     } else {
-      canvas.fillRect(86, yPos + 2, 5, 5, items[i].color);
+      canvas.fillRect(86, yPos + 1, 4, 4, items[i].color);
+      canvas.setCursor(93, yPos);
+      canvas.setTextColor(FIX_CYAN);
+      canvas.print("CL");
     }
 
-    // Distance in meters
-    canvas.setCursor(94, yPos);
+    // Distance right-aligned
+    canvas.setCursor(125, yPos);
     canvas.setTextColor(FIX_WHITE);
     if (items[i].dist < 10.0f) {
       canvas.printf("%3.1fm", items[i].dist);
@@ -1310,12 +1320,12 @@ void drawRadar() {
       canvas.printf("%2.0fm ", items[i].dist);
     }
 
-    // MAC suffix label
-    canvas.setCursor(132, yPos);
-    canvas.setTextColor(items[i].isAP ? FIX_YELLOW : FIX_GREEN);
+    // Line 2: Truncated SSID / Vendor Name
+    canvas.setCursor(85, yPos + 9);
+    canvas.setTextColor(items[i].color);
     canvas.print(items[i].label);
 
-    yPos += 22;
+    yPos += 23;
   }
 
   // Push double-buffer frame to screen
