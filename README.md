@@ -11,15 +11,20 @@ An active Wi-Fi packet analyzer and passive device tracker designed for the ESP3
 
 ## 🚀 Key Features
 
+*   **Visual 360° Circular Radar Display:** Features a real-time rotating radar sweep animation that maps surrounding devices in 2D space based on RSSI signal strength and MAC hash orientation.
+    *   **Access Points (Routers):** Rendered as open yellow circles (`AP:` prefix).
+    *   **Client Devices (Phones/Laptops):** Rendered as solid dots (`CL:` prefix) color-coded by proximity.
+*   **Logarithmic Distance Estimation:** Converts RSSI to physical distance metrics in meters ($d = 10^{\frac{-40 - RSSI}{27}}$) for real-time telemetry.
 *   **Promiscuous Mode Packet Capture:** Hooks directly into ESP32's low-level Wi-Fi stack to sniff 802.11 management frames (Probe Requests, Beacons) and data packets.
 *   **Double-Buffered Display System:** Uses Adafruit GFX's `GFXcanvas16` double-buffering. All graphics render off-screen first and are pushed to the display in a single operation, eliminating backlight flicker.
 *   **Automatic Channel Hopping:** Dynamically cycles through Wi-Fi channels 1 to 13 every 300ms to monitor the entire 2.4GHz band.
 *   **Intelligent Database & Node Aging:** Maintains a localized database of up to 30 clients and 30 Access Points. Cleanses inactive records after 30 seconds to prevent tracking stale data.
 *   **OUI Vendor Lookup:** Decodes MAC address prefixes (OUI) in real-time to identify device manufacturers (e.g., Apple, Google, Samsung, Espressif, Xiaomi, Oppo).
-*   **Dynamic UI Modes:** Alternates the screen view every 5 seconds across three modes:
-    1.  **Clients Mode (Cyan):** Displays client MAC addresses, signal strength (RSSI in dBm), and the target SSIDs they are actively searching for.
-    2.  **Access Points Mode (Yellow):** Displays nearby AP names, encryption types (WPA2, WPA, WEP, OPEN), channel number, and RSSI.
-    3.  **Combined Radar (White/Mixed):** A consolidated list of all active nearby clients and APs sorted by proximity (RSSI).
+*   **Dynamic UI Modes:** Cycles screen views every 5 seconds (or manually via BOOT button press):
+    1.  **Visual Radar Mode (Green/Yellow/Cyan):** Concentric RSSI rings, rotating sweep line, device blips, and live right-side distance readout.
+    2.  **Clients Mode (Cyan):** Displays client MAC addresses, signal strength (RSSI in dBm), and the target SSIDs they are actively searching for.
+    3.  **Access Points Mode (Yellow):** Displays nearby AP names, encryption types (WPA2, WPA, WEP, OPEN), channel number, and RSSI.
+    4.  **Combined Mode (White/Mixed):** A consolidated list of all active nearby clients and APs sorted by proximity (RSSI).
 
 ---
 
