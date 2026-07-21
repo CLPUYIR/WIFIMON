@@ -1217,6 +1217,9 @@ void drawRadar() {
   }
 
   // Push double-buffer frame to screen
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+}
+
 // Render non-spamming Live Terminal HUD Dashboard
 void drawConsoleHUD() {
     if (!hudSerialMode) return;
