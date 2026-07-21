@@ -158,6 +158,51 @@ bool autoToggleMode = true;
 unsigned long buttonPressStart = 0;
 bool buttonWasPressed = false;
 
+bool liveSerialMonitor = true; // Active live stream for PuTTY
+
+int rssiToPercentage(int rssi) {
+    if (rssi <= -100) return 0;
+    if (rssi >= -30) return 100;
+    return (int)((rssi + 100) * 1.42857f);
+}
+
+void logLiveClient(uint8_t* mac, int rssi, const char* ssid, bool isNew) {
+    if (!liveSerialMonitor) return;
+    int h = 0, m = 0, s = 0;
+    getCurrentTime(h, m, s);
+    const char* vendor = getVendor(mac);
+    float dist = pow(10.0f, (-40.0f - (float)rssi) / 27.0f);
+    int sigPct = rssiToPercentage(rssi);
+
+    const char* color = (rssi > -60) ? "\033[32m" : ((rssi > -80) ? "\033[33m" : "\033[31m");
+
+    Serial.printf("\033[36m[%02d:%02d:%02d]\033[0m %s %sMAC: %02X:%02X:%02X:%02X:%02X:%02X\033[0m | Vendor: %-12s | RSSI: %3ddBm (%3d%%) | Dist: %4.1fm | CH: %2d",
+                  h, m, s, isNew ? "\033[1;32m[DISCOVERED]\033[0m" : "\033[33m[UPDATED]\033[0m   ",
+                  color, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  vendor, rssi, sigPct, dist, currentChannel);
+
+    if (ssid && strlen(ssid) > 0) {
+        Serial.printf(" | Probed SSID: \033[1;37m%s\033[0m\r\n", ssid);
+    } else {
+        Serial.printf("\r\n");
+    }
+}
+
+void logLiveAP(uint8_t* bssid, const char* ssid, int rssi, int channel, const char* enc, bool isNew) {
+    if (!liveSerialMonitor) return;
+    int h = 0, m = 0, s = 0;
+    getCurrentTime(h, m, s);
+    float dist = pow(10.0f, (-40.0f - (float)rssi) / 27.0f);
+    int sigPct = rssiToPercentage(rssi);
+
+    const char* encColor = (strcmp(enc, "OPEN") == 0 || strcmp(enc, "WEP") == 0) ? "\033[1;31m" : "\033[32m";
+
+    Serial.printf("\033[36m[%02d:%02d:%02d]\033[0m %s BSSID: %02X:%02X:%02X:%02X:%02X:%02X | SSID: \033[1;37m%-16.16s\033[0m | CH: %2d | Enc: %s%-4s\033[0m | RSSI: %3ddBm (%3d%%) | Dist: %4.1fm\r\n",
+                  h, m, s, isNew ? "\033[1;35m[AP NEW]\033[0m" : "\033[35m[AP UPD]\033[0m",
+                  bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+                  ssid, channel, encColor, enc, rssi, sigPct, dist);
+}
+
 // Updates or inserts a client device in the tracker list
 void update_client(uint8_t* mac, int rssi, const char* ssid, unsigned long now) {
   int foundIdx = -1;
@@ -181,6 +226,7 @@ void update_client(uint8_t* mac, int rssi, const char* ssid, unsigned long now) 
   }
 
   int insertIdx = (foundIdx >= 0) ? foundIdx : ((emptyIdx >= 0) ? emptyIdx : oldestIdx);
+  bool isNew = (foundIdx < 0);
 
   memcpy(trackedClients[insertIdx].mac, mac, 6);
   trackedClients[insertIdx].rssi = rssi;
@@ -196,6 +242,8 @@ void update_client(uint8_t* mac, int rssi, const char* ssid, unsigned long now) 
 
   trackedClients[insertIdx].lastSeen = now;
   trackedClients[insertIdx].active = true;
+
+  logLiveClient(mac, rssi, trackedClients[insertIdx].probedSSID, isNew);
 }
 
 // Updates or inserts an Access Point in the tracker list
@@ -221,6 +269,7 @@ void update_ap(uint8_t* bssid, const char* ssid, int rssi, int channel, const ch
   }
 
   int insertIdx = (foundIdx >= 0) ? foundIdx : ((emptyIdx >= 0) ? emptyIdx : oldestIdx);
+  bool isNew = (foundIdx < 0);
 
   memcpy(trackedAPs[insertIdx].bssid, bssid, 6);
   strncpy(trackedAPs[insertIdx].ssid, ssid, 32);
@@ -231,6 +280,8 @@ void update_ap(uint8_t* bssid, const char* ssid, int rssi, int channel, const ch
   trackedAPs[insertIdx].encryption[7] = '\0';
   trackedAPs[insertIdx].lastSeen = now;
   trackedAPs[insertIdx].active = true;
+
+  logLiveAP(bssid, ssid, rssi, trackedAPs[insertIdx].channel, enc, isNew);
 }
 
 // Sniffer callback parses 802.11 management frames and active data frames
@@ -703,66 +754,76 @@ void handleButton() {
   }
 }
 
-// --- Real-time Clock & PuTTY Command Functions ---
+void processSerialCommand(String cmd) {
+  cmd.trim();
+  if (cmd.startsWith("TIME:")) {
+    int h = cmd.substring(5, 7).toInt();
+    int m = cmd.substring(8, 10).toInt();
+    int s = cmd.substring(11, 13).toInt();
+    if (h >= 0 && h < 24 && m >= 0 && m < 60 && s >= 0 && s < 60) {
+      rtcHour = h;
+      rtcMin = m;
+      rtcSec = s;
+      lastTimeUpdateMillis = millis();
+      clockSynced = true;
+      Serial.println("\r\n\033[32m[CLOCK] Time successfully synced!\033[0m");
+    }
+  } else if (cmd.equalsIgnoreCase("m 1") || cmd.equalsIgnoreCase("m radar")) {
+    autoToggleMode = false;
+    currentMode = RADAR_MODE;
+    Serial.println("\r\n\033[32m[UI] Switched to RADAR view\033[0m");
+  } else if (cmd.equalsIgnoreCase("m 2") || cmd.equalsIgnoreCase("m clients") || cmd.equalsIgnoreCase("m probes")) {
+    autoToggleMode = false;
+    currentMode = CLIENTS_MODE;
+    Serial.println("\r\n\033[32m[UI] Switched to PROBES / CLIENTS view\033[0m");
+  } else if (cmd.equalsIgnoreCase("m 3") || cmd.equalsIgnoreCase("m aps")) {
+    autoToggleMode = false;
+    currentMode = APS_MODE;
+    Serial.println("\r\n\033[32m[UI] Switched to ACCESS POINTS view\033[0m");
+  } else if (cmd.equalsIgnoreCase("m 4") || cmd.equalsIgnoreCase("m combined")) {
+    autoToggleMode = false;
+    currentMode = COMBINED_MODE;
+    Serial.println("\r\n\033[32m[UI] Switched to COMBINED view\033[0m");
+  } else if (cmd.equalsIgnoreCase("m") || cmd.equalsIgnoreCase("mode")) {
+    autoToggleMode = false;
+    if (currentMode == CLIENTS_MODE) currentMode = APS_MODE;
+    else if (currentMode == APS_MODE) currentMode = COMBINED_MODE;
+    else if (currentMode == COMBINED_MODE) currentMode = RADAR_MODE;
+    else currentMode = CLIENTS_MODE;
+    Serial.printf("\r\n\033[32m[UI] Mode cycled to view #%d\033[0m\r\n", (int)currentMode + 1);
+  } else if (cmd.equalsIgnoreCase("l")) {
+    liveSerialMonitor = !liveSerialMonitor;
+    Serial.printf("\r\n\033[35m[SYSTEM] Live serial log stream: %s\033[0m\r\n", liveSerialMonitor ? "ENABLED" : "DISABLED");
+  } else if (cmd.equalsIgnoreCase("auto")) {
+    autoToggleMode = !autoToggleMode;
+    Serial.printf("\r\n\033[32m[UI] Auto-toggle: %s\033[0m\r\n", autoToggleMode ? "ENABLED" : "DISABLED");
+  } else if (cmd.equalsIgnoreCase("h") || cmd.equalsIgnoreCase("?")) {
+    Serial.println("\r\n\033[35m--- ESP32 WIFIMON Serial View & Control Commands ---\033[0m");
+    Serial.println("  m 1 / m radar    : Switch TFT to RADAR view");
+    Serial.println("  m 2 / m clients  : Switch TFT to PROBES view");
+    Serial.println("  m 3 / m aps      : Switch TFT to ACCESS POINTS view");
+    Serial.println("  m 4 / m combined : Switch TFT to COMBINED view");
+    Serial.println("  m or mode        : Cycle to next TFT view");
+    Serial.println("  l                : Toggle live packet stream on/off");
+    Serial.println("  auto             : Toggle auto-view switching on/off");
+    Serial.println("  TIME:HH:MM:SS    : Sync device time");
+    Serial.println("----------------------------------------------------\r\n");
+  }
+}
+
 void handleSerial() {
   static String inputBuffer = "";
   while (Serial.available() > 0) {
     char c = Serial.read();
-    if (c == '\n') {
+    if (c == '\n' || c == '\r') {
       inputBuffer.trim();
-      if (inputBuffer.startsWith("TIME:")) {
-        int h = inputBuffer.substring(5, 7).toInt();
-        int m = inputBuffer.substring(8, 10).toInt();
-        int s = inputBuffer.substring(11, 13).toInt();
-        if (h >= 0 && h < 24 && m >= 0 && m < 60 && s >= 0 && s < 60) {
-          rtcHour = h;
-          rtcMin = m;
-          rtcSec = s;
-          lastTimeUpdateMillis = millis();
-          clockSynced = true;
-          Serial.println("\n[CLOCK] Time successfully synced!");
-        }
-      } else if (inputBuffer.equalsIgnoreCase("m 1") || inputBuffer.equalsIgnoreCase("m radar")) {
-        autoToggleMode = false;
-        currentMode = RADAR_MODE;
-        Serial.println("\n[UI] Switched to RADAR view");
-      } else if (inputBuffer.equalsIgnoreCase("m 2") || inputBuffer.equalsIgnoreCase("m clients") || inputBuffer.equalsIgnoreCase("m probes")) {
-        autoToggleMode = false;
-        currentMode = CLIENTS_MODE;
-        Serial.println("\n[UI] Switched to PROBES / CLIENTS view");
-      } else if (inputBuffer.equalsIgnoreCase("m 3") || inputBuffer.equalsIgnoreCase("m aps")) {
-        autoToggleMode = false;
-        currentMode = APS_MODE;
-        Serial.println("\n[UI] Switched to ACCESS POINTS view");
-      } else if (inputBuffer.equalsIgnoreCase("m 4") || inputBuffer.equalsIgnoreCase("m combined")) {
-        autoToggleMode = false;
-        currentMode = COMBINED_MODE;
-        Serial.println("\n[UI] Switched to COMBINED view");
-      } else if (inputBuffer.equalsIgnoreCase("m") || inputBuffer.equalsIgnoreCase("mode")) {
-        autoToggleMode = false;
-        if (currentMode == CLIENTS_MODE) currentMode = APS_MODE;
-        else if (currentMode == APS_MODE) currentMode = COMBINED_MODE;
-        else if (currentMode == COMBINED_MODE) currentMode = RADAR_MODE;
-        else currentMode = CLIENTS_MODE;
-        Serial.printf("\n[UI] Mode cycled to view #%d\n", (int)currentMode + 1);
-      } else if (inputBuffer.equalsIgnoreCase("auto")) {
-        autoToggleMode = !autoToggleMode;
-        Serial.printf("\n[UI] Auto-toggle: %s\n", autoToggleMode ? "ENABLED" : "DISABLED");
-      } else if (inputBuffer.equalsIgnoreCase("h") || inputBuffer.equalsIgnoreCase("?")) {
-        Serial.println("\n--- Serial View Switch Commands ---");
-        Serial.println("  m 1 or m radar    : Switch TFT to RADAR view");
-        Serial.println("  m 2 or m clients  : Switch TFT to PROBES view");
-        Serial.println("  m 3 or m aps      : Switch TFT to ACCESS POINTS view");
-        Serial.println("  m 4 or m combined : Switch TFT to COMBINED view");
-        Serial.println("  m or mode        : Cycle to next TFT view");
-        Serial.println("  auto             : Toggle auto-view switching on/off");
-        Serial.println("  TIME:HH:MM:SS    : Sync device time");
-        Serial.println("------------------------------------");
+      if (inputBuffer.length() > 0) {
+        processSerialCommand(inputBuffer);
+        inputBuffer = "";
       }
-      inputBuffer = "";
-    } else if (c != '\r') {
+    } else {
       inputBuffer += c;
-      if (inputBuffer.length() > 50) {
+      if (inputBuffer.length() > 64) {
         inputBuffer = "";
       }
     }
