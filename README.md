@@ -11,9 +11,10 @@ An active Wi-Fi packet analyzer and passive device tracker designed for the ESP3
 
 ## 🚀 Key Features
 
-*   **Visual 360° Circular Radar Display:** Features a real-time rotating radar sweep animation that maps surrounding devices in 2D space based on RSSI signal strength and MAC hash orientation.
+*   **Visual 360° Circular Radar Display (Default Boot View):** Features a real-time rotating radar sweep animation that maps surrounding devices in 2D space based on RSSI signal strength and MAC hash orientation. Displays SSIDs and OUI Vendor names directly on the radar screen.
     *   **Access Points (Routers):** Rendered as open yellow circles (`AP:` prefix).
     *   **Client Devices (Phones/Laptops):** Rendered as solid dots (`CL:` prefix) color-coded by proximity.
+*   **Non-Spam Live Terminal HUD:** Clean, non-scrolling terminal dashboard auto-refreshing every second with proximity classification (`[IMMEDIATE]`, `[NEARBY]`, `[FAR]`) and signal strength gauges.
 *   **Logarithmic Distance Estimation:** Converts RSSI to physical distance metrics in meters ($d = 10^{\frac{-40 - RSSI}{27}}$) for real-time telemetry.
 *   **Promiscuous Mode Packet Capture:** Hooks directly into ESP32's low-level Wi-Fi stack to sniff 802.11 management frames (Probe Requests, Beacons) and data packets.
 *   **Double-Buffered Display System:** Uses Adafruit GFX's `GFXcanvas16` double-buffering. All graphics render off-screen first and are pushed to the display in a single operation, eliminating backlight flicker.
@@ -21,8 +22,8 @@ An active Wi-Fi packet analyzer and passive device tracker designed for the ESP3
 *   **Intelligent Database & Node Aging:** Maintains a localized database of up to 30 clients and 30 Access Points. Cleanses inactive records after 30 seconds to prevent tracking stale data.
 *   **OUI Vendor Lookup:** Decodes MAC address prefixes (OUI) in real-time to identify device manufacturers (e.g., Apple, Google, Samsung, Espressif, Xiaomi, Oppo).
 *   **Dynamic UI Modes:** Cycles screen views every 5 seconds (or manually via BOOT button press):
-    1.  **Visual Radar Mode (Green/Yellow/Cyan):** Concentric RSSI rings, rotating sweep line, device blips, and live right-side distance readout.
-    2.  **Clients Mode (Cyan):** Displays client MAC addresses, signal strength (RSSI in dBm), and the target SSIDs they are actively searching for.
+    1.  **Visual Radar Mode (Default):** Concentric RSSI rings, rotating sweep line, device blips with SSIDs/Vendors, and live right-side distance readout.
+    2.  **Clients Mode (Cyan):** Displays client MAC addresses, signal strength (RSSI in dBm), and target SSIDs.
     3.  **Access Points Mode (Yellow):** Displays nearby AP names, encryption types (WPA2, WPA, WEP, OPEN), channel number, and RSSI.
     4.  **Combined Mode (White/Mixed):** A consolidated list of all active nearby clients and APs sorted by proximity (RSSI).
 
@@ -87,10 +88,12 @@ Go to **Sketch > Include Library > Manage Libraries...** and search for and inst
     *   `Red (APs Mode):` Unencrypted/Vulnerable networks (`OPEN`/`WEP`).
 
 ### PuTTY / Serial Terminal View Controls
-Send commands over serial at **115200 baud** to switch TFT display views remotely:
+Send commands over serial at **115200 baud** to switch TFT display views and terminal dashboards:
 
 | Command | Action |
 | :--- | :--- |
+| `hud` | Toggle non-spam **Live Terminal HUD Dashboard** (1s auto-refresh) |
+| `l` | Toggle **Raw Serial Packet Logging Stream** |
 | `m 1` or `m radar` | Switch TFT screen to **Visual Radar Mode** |
 | `m 2` or `m clients` | Switch TFT screen to **Probes / Clients Mode** |
 | `m 3` or `m aps` | Switch TFT screen to **Access Points Mode** |
