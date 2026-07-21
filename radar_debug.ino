@@ -3,15 +3,101 @@
 #include <Adafruit_ST7735.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <time.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <DNSServer.h>
+
+// --- Portal and Storage Variables ---
+WebServer server(80);
+DNSServer dnsServer;
+Preferences preferences;
+const byte DNS_PORT = 53;
+IPAddress apIP(192, 168, 4, 1);
+
+const char* CONFIG_HTML = 
+"<!DOCTYPE html>"
+"<html>"
+"<head>"
+"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+"<title>Sniffer Config</title>"
+"<style>"
+"body { font-family: -apple-system, sans-serif; background: #0f0f12; color: #e4e4e7; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }"
+".card { background: #18181b; border: 1px solid #27272a; padding: 30px; border-radius: 12px; width: 100%; max-width: 320px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }"
+"h2 { margin-top: 0; color: #06b6d4; text-align: center; font-size: 1.5rem; }"
+"p { color: #a1a1aa; font-size: 0.9rem; text-align: center; margin-bottom: 20px; }"
+"label { display: block; margin-bottom: 6px; font-size: 0.85rem; color: #a1a1aa; }"
+"input, select { width: 100%; padding: 10px; background: #09090b; border: 1px solid #27272a; border-radius: 6px; color: white; margin-bottom: 15px; box-sizing: border-box; font-size: 0.95rem; }"
+"input:focus, select:focus { border-color: #06b6d4; outline: none; }"
+"button { width: 100%; padding: 12px; background: linear-gradient(135deg, #06b6d4, #0891b2); border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; font-size: 0.95rem; transition: opacity 0.2s; }"
+"button:hover { opacity: 0.9; }"
+"</style>"
+"</head>"
+"<body>"
+"<div class='card'>"
+"<h2>Sniffer Setup</h2>"
+"<p>Configure the Wi-Fi credentials and Timezone for your plug-and-play sniffer clock.</p>"
+"<form action='/save' method='POST'>"
+"<label for='ssid'>Wi-Fi Name (SSID)</label>"
+"<input type='text' id='ssid' name='ssid' placeholder='SSID Name' required>"
+"<label for='pass'>Password</label>"
+"<input type='password' id='pass' name='pass' placeholder='Password'>"
+"<label for='tz'>Timezone Offset (Hours from UTC)</label>"
+"<select id='tz' name='tz'>"
+"<option value='-12'>UTC-12:00</option>"
+"<option value='-11'>UTC-11:00</option>"
+"<option value='-10'>UTC-10:00</option>"
+"<option value='-9.5'>UTC-09:30</option>"
+"<option value='-9'>UTC-09:00</option>"
+"<option value='-8'>UTC-08:00 (PST)</option>"
+"<option value='-7'>UTC-07:00 (MST)</option>"
+"<option value='-6'>UTC-06:00 (CST)</option>"
+"<option value='-5'>UTC-05:00 (EST)</option>"
+"<option value='-4'>UTC-04:00 (AST)</option>"
+"<option value='-3.5'>UTC-03:30</option>"
+"<option value='-3'>UTC-03:00</option>"
+"<option value='-2'>UTC-02:00</option>"
+"<option value='-1'>UTC-01:00</option>"
+"<option value='0'>UTC+00:00 (GMT/UTC)</option>"
+"<option value='1'>UTC+01:00 (CET)</option>"
+"<option value='2'>UTC+02:00 (EET)</option>"
+"<option value='3'>UTC+03:00 (MSK)</option>"
+"<option value='3.5'>UTC+03:30 (Iran)</option>"
+"<option value='4'>UTC+04:00 (GST)</option>"
+"<option value='4.5'>UTC+04:30 (Kabul)</option>"
+"<option value='5'>UTC+05:00 (PKT)</option>"
+"<option value='5.5' selected>UTC+05:30 (IST - India)</option>"
+"<option value='5.75'>UTC+05:45 (Nepal)</option>"
+"<option value='6'>UTC+06:00 (BST)</option>"
+"<option value='6.5'>UTC+06:30 (Myanmar)</option>"
+"<option value='7'>UTC+07:00 (WIB)</option>"
+"<option value='8'>UTC+08:00 (SGT/CST)</option>"
+"<option value='8.75'>UTC+08:45 (ACWST)</option>"
+"<option value='9'>UTC+09:00 (JST)</option>"
+"<option value='9.5'>UTC+09:30 (ACST)</option>"
+"<option value='10'>UTC+10:00 (AEST)</option>"
+"<option value='10.5'>UTC+10:30 (LHST)</option>"
+"<option value='11'>UTC+11:00</option>"
+"<option value='12'>UTC+12:00 (NZST)</option>"
+"<option value='12.75'>UTC+12:45 (CHAST)</option>"
+"<option value='13'>UTC+13:00</option>"
+"<option value='14'>UTC+14:00</option>"
+"</select>"
+"<button type='submit'>Save and Connect</button>"
+"</form>"
+"</div>"
+"</body>"
+"</html>";
 
 // --- TFT Pin Definitions ---
 #define TFT_SCK   18
+#define TFT_MISO  19
 #define TFT_MOSI  23
 #define TFT_RST   4
 #define TFT_DC    2
 #define TFT_CS    15
 
-// Initialize the ST7735 screen
+// Initialize the ST7735 screen (Using Software SPI to match physical wiring/board variant)
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCK, TFT_RST);
 
 // Create a double-buffer canvas to eliminate screen flicker
@@ -55,56 +141,24 @@ AccessPoint trackedAPs[MAX_APS];
 int currentChannel = 1;
 unsigned long lastChannelChange = 0;
 
-enum DisplayMode { CLIENTS_MODE, APS_MODE, COMBINED_MODE };
-DisplayMode currentMode = CLIENTS_MODE;
+enum DisplayMode { CLIENTS_MODE, APS_MODE, COMBINED_MODE, RADAR_MODE };
+DisplayMode currentMode = RADAR_MODE;
 unsigned long lastModeToggle = 0;
 
-// OUI Lookup to find Device Manufacturer from the first 3 bytes of the MAC address
-const char* getVendor(uint8_t* mac) {
-  uint32_t oui = (mac[0] << 16) | (mac[1] << 8) | mac[2];
-  switch (oui) {
-    case 0x5C013B: case 0xD8A01D: case 0xBCDDC2: case 0x002608: 
-    case 0x88E9FE: case 0x94E979: case 0x244B03: case 0xD4F278: 
-    case 0x404E36: case 0xF01898: case 0xF0B3EC: case 0xA45E60: 
-    case 0xF4CB52: case 0x2CD066: case 0x3408BC: case 0xD0D2B0: 
-    case 0xB418D1: case 0xAC7F3E:
-      return "Apple";
-    case 0xF8E079: case 0xE4E0C5: case 0xCC6C59: case 0x7404F1:
-    case 0x04D6AA: case 0x0CFE45: case 0xD4A33D:
-      return "Samsung";
-    case 0x30AEA4: case 0xFCF5C4: case 0x18FE34: case 0x240AC4:
-    case 0x2C3AE8: case 0x308398: case 0x4C11AE: case 0x500291:
-    case 0x545A16: case 0x58CF79: case 0x600194: case 0x64B708:
-    case 0x68C63A: case 0x70B3D5: case 0x7C9EBD: case 0x807D3A:
-    case 0x840D8E: case 0x84F3EB: case 0x9097D5: case 0x90E202:
-    case 0x98CDAC: case 0xA020A6: case 0xA47B2C: case 0xAC67B2:
-    case 0xC049EF: case 0xC44F33: case 0xC82786: case 0xD8F15B:
-    case 0xE05A1B: case 0xE831CD: case 0xE868E7: case 0xE89F6D:
-    case 0xECFABC: case 0xF412FA: case 0xF4CFA2: case 0x1097BD:
-    case 0xACC048: case 0x40AE30: case 0x3C6AD2: case 0xEC2BEB:
-      return "Espressif";
-    case 0x0013E8: case 0x001E67: case 0x0024D7: case 0xA438CC:
-    case 0x281878: case 0x3C6A9D: case 0x4851B5: case 0x705A0F:
-      return "Intel";
-    case 0xA0999B: case 0x001A11: case 0xE4A7A0: case 0x3C5AB6:
-      return "Google";
-    case 0xC0EEFB: case 0x980DE4: case 0x7C04D0:
-      return "Oppo/OnePlus";
-    case 0x9009DF: case 0x640980: case 0x50EC50: case 0x286C07:
-      return "Xiaomi";
-    case 0x001E10: case 0x00E0FC: case 0x24DF6A: case 0x283152:
-      return "Huawei";
-    case 0x50C7BF: case 0xEC086B: case 0xF4F26D:
-      return "TP-Link";
-    case 0x000F66: case 0x00146C: case 0x001F33: case 0x0026F2:
-      return "Netgear";
-    default:
-      if (mac[0] & 0x02) return "Randomized";
-      return "Unknown";
-  }
-}
+// --- Real-time Clock Variables ---
+int rtcHour = 0;
+int rtcMin = 0;
+int rtcSec = 0;
+unsigned long lastTimeUpdateMillis = 0;
+bool clockSynced = false;
 
-// Updates or inserts a client device in the tracker list (with Serial debugging)
+// --- Button Control Variables ---
+#define BUTTON_PIN 0 // BOOT button on ESP32 is GPIO 0
+bool autoToggleMode = true;
+unsigned long buttonPressStart = 0;
+bool buttonWasPressed = false;
+
+// Updates or inserts a client device in the tracker list
 void update_client(uint8_t* mac, int rssi, const char* ssid, unsigned long now) {
   int foundIdx = -1;
   int emptyIdx = -1;
@@ -127,40 +181,24 @@ void update_client(uint8_t* mac, int rssi, const char* ssid, unsigned long now) 
   }
 
   int insertIdx = (foundIdx >= 0) ? foundIdx : ((emptyIdx >= 0) ? emptyIdx : oldestIdx);
-  bool isNew = (foundIdx < 0);
 
   memcpy(trackedClients[insertIdx].mac, mac, 6);
   trackedClients[insertIdx].rssi = rssi;
   
-  bool ssidAdded = false;
+  // Only overwrite SSID if a valid SSID name is provided
   if (ssid && strlen(ssid) > 0) {
-    // Only update if it's a new SSID or changed
-    if (strcmp(trackedClients[insertIdx].probedSSID, ssid) != 0) {
-      strncpy(trackedClients[insertIdx].probedSSID, ssid, 32);
-      trackedClients[insertIdx].probedSSID[32] = '\0';
-      ssidAdded = true;
-    }
-  } else if (isNew) {
+    strncpy(trackedClients[insertIdx].probedSSID, ssid, 32);
+    trackedClients[insertIdx].probedSSID[32] = '\0';
+  } else if (foundIdx < 0) {
+    // If it's a new client found via data sniffing (no SSID), initialize as empty
     trackedClients[insertIdx].probedSSID[0] = '\0';
   }
 
   trackedClients[insertIdx].lastSeen = now;
   trackedClients[insertIdx].active = true;
-
-  // --- SERIAL DEBUGGING OUTPUT ---
-  if (isNew || ssidAdded) {
-    Serial.printf("[CLIENT] %s MAC: %02X:%02X:%02X:%02X:%02X:%02X | RSSI: %d dBm",
-                  isNew ? "DISCOVERED" : "UPDATED   ",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi);
-    if (strlen(trackedClients[insertIdx].probedSSID) > 0) {
-      Serial.printf(" | Probed SSID: %s\n", trackedClients[insertIdx].probedSSID);
-    } else {
-      Serial.printf(" | Vendor: %s\n", getVendor(mac));
-    }
-  }
 }
 
-// Updates or inserts an Access Point in the tracker list (with Serial debugging)
+// Updates or inserts an Access Point in the tracker list
 void update_ap(uint8_t* bssid, const char* ssid, int rssi, int channel, const char* enc, unsigned long now) {
   int foundIdx = -1;
   int emptyIdx = -1;
@@ -183,7 +221,6 @@ void update_ap(uint8_t* bssid, const char* ssid, int rssi, int channel, const ch
   }
 
   int insertIdx = (foundIdx >= 0) ? foundIdx : ((emptyIdx >= 0) ? emptyIdx : oldestIdx);
-  bool isNew = (foundIdx < 0);
 
   memcpy(trackedAPs[insertIdx].bssid, bssid, 6);
   strncpy(trackedAPs[insertIdx].ssid, ssid, 32);
@@ -194,13 +231,6 @@ void update_ap(uint8_t* bssid, const char* ssid, int rssi, int channel, const ch
   trackedAPs[insertIdx].encryption[7] = '\0';
   trackedAPs[insertIdx].lastSeen = now;
   trackedAPs[insertIdx].active = true;
-
-  // --- SERIAL DEBUGGING OUTPUT ---
-  if (isNew) {
-    Serial.printf("[AP] DISCOVERED BSSID: %02X:%02X:%02X:%02X:%02X:%02X | SSID: %-15s | CH: %d | Enc: %s | RSSI: %d dBm\n",
-                  bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
-                  ssid, trackedAPs[insertIdx].channel, enc, rssi);
-  }
 }
 
 // Sniffer callback parses 802.11 management frames and active data frames
@@ -221,9 +251,9 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
     uint8_t *sa = payload + 10; // Source MAC starts at byte 10
     if ((sa[0] == 0xFF && sa[1] == 0xFF) || (sa[0] == 0x00 && sa[1] == 0x00)) return;
 
-    if (subtype == 0x04) { // Probe Request
+    if (subtype == 0x04) { // Probe Request (Client searching for SSIDs)
       char ssid[33] = {0};
-      int offset = 24;
+      int offset = 24; // Tagged parameters start at offset 24
 
       while (offset + 2 <= len) {
         uint8_t tag_num = payload[offset];
@@ -241,9 +271,9 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
       if (strlen(ssid) == 0) return;
       update_client(sa, rssi, ssid, now);
     } 
-    else if (subtype == 0x08) { // Beacon Frame
+    else if (subtype == 0x08) { // Beacon Frame (AP broadcasting SSID & capabilities)
       char ssid[33] = {0};
-      int offset = 36;
+      int offset = 36; // Tagged parameters start at offset 36
 
       while (offset + 2 <= len) {
         uint8_t tag_num = payload[offset];
@@ -260,7 +290,7 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
       }
       if (strlen(ssid) == 0) return;
 
-      // Get channel from Tag 3
+      // Get channel from Tag 3 (DS Parameter Set)
       int channel = -1;
       offset = 36;
       while (offset + 2 <= len) {
@@ -275,7 +305,7 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
         offset += 2 + tag_len;
       }
 
-      // Parse capabilities
+      // Parse security capabilities
       char enc[8] = "WEP";
       uint16_t capability = (payload[35] << 8) | payload[34];
       bool privacy = (capability & (1 << 4)) != 0;
@@ -291,9 +321,9 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
           uint8_t tag_len = payload[offset + 1];
           if (offset + 2 + tag_len > len) break;
 
-          if (tag_num == 48) {
+          if (tag_num == 48) { // Tag 48 represents RSN (WPA2/WPA3)
             hasWpa2 = true;
-          } else if (tag_num == 221) {
+          } else if (tag_num == 221) { // Tag 221 represents Vendor Specific (often WPA)
             if (tag_len >= 4 && payload[offset+2] == 0x00 && payload[offset+3] == 0x50 && payload[offset+4] == 0xF2 && payload[offset+5] == 0x01) {
               hasWpa = true;
             }
@@ -307,6 +337,7 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
     }
   }
   // --- CASE B: DATA FRAMES (type = 0x02) ---
+  // If active data communication is happening, extract client MAC address immediately
   else if (typeVal == 0x02) {
     uint8_t flags = payload[1];
     uint8_t toDS = flags & 0x01;
@@ -314,39 +345,228 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
     uint8_t *clientMac = NULL;
 
     if (toDS && !fromDS) {
+      // Packet is Client -> AP (Source Address is client)
       clientMac = payload + 10;
     } else if (!toDS && fromDS) {
+      // Packet is AP -> Client (Destination Address is client)
       clientMac = payload + 4;
     } else if (!toDS && !fromDS) {
+      // Client-to-Client / Direct Ad-hoc
       clientMac = payload + 10;
     }
 
     if (clientMac) {
+      // Ignore broadcast/multicast (LSB of first octet is 1)
       if (clientMac[0] & 0x01) return;
+      // Filter out invalid null MACs
       if (clientMac[0] == 0x00 && clientMac[1] == 0x00 && clientMac[2] == 0x00) return;
+
       update_client(clientMac, rssi, "", now);
     }
   }
 }
 
+// --- Captive Portal & NTP Helper Functions ---
+void handleRoot() {
+  server.send(200, "text/html", CONFIG_HTML);
+}
+
+void handleSave() {
+  String ssid = server.arg("ssid");
+  String pass = server.arg("pass");
+  float tz = server.arg("tz").toFloat();
+  
+  preferences.begin("wifi-config", false);
+  preferences.putString("ssid", ssid);
+  preferences.putString("pass", pass);
+  preferences.putFloat("tzOffset", tz);
+  preferences.end();
+  
+  String html = "<html><body style='background:#0f0f12;color:white;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;'>";
+  html += "<div style='text-align:center;background:#18181b;padding:30px;border-radius:12px;border:1px solid #27272a;max-width:300px;'>";
+  html += "<h2 style='color:#22c55e;margin-top:0;'>Saved!</h2>";
+  html += "<p style='color:#a1a1aa;'>Connecting to: <b>" + ssid + "</b></p>";
+  html += "<p style='color:#a1a1aa;'>Timezone Offset: <b>UTC " + String(tz >= 0 ? "+" : "") + String(tz) + "</b></p>";
+  html += "<p style='font-size:0.85rem;color:#71717a;'>Device is restarting...</p>";
+  html += "</div></body></html>";
+  
+  server.send(200, "text/html", html);
+  delay(2000);
+  ESP.restart();
+}
+
+void handleNotFound() {
+  server.sendHeader("Location", String("http://192.168.4.1/"), true);
+  server.send(302, "text/plain", "");
+}
+
+bool connectToWiFi(String ssid, String pass) {
+  canvas.fillScreen(FIX_BLACK);
+  canvas.setCursor(0, 5);
+  canvas.setTextColor(FIX_CYAN);
+  canvas.print("WiFi Connecting");
+  canvas.drawLine(0, 16, 160, 16, FIX_WHITE);
+  
+  canvas.setTextColor(FIX_WHITE);
+  canvas.setCursor(0, 24);
+  canvas.print("SSID: "); canvas.println(ssid);
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    canvas.print(".");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    canvas.println();
+    canvas.setTextColor(FIX_GREEN);
+    canvas.println("WiFi Connected!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+    return true;
+  }
+  
+  canvas.println();
+  canvas.setTextColor(FIX_RED);
+  canvas.println("WiFi Timeout!");
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+  delay(1500);
+  return false;
+}
+
+bool syncNTP(float tzOffset) {
+  long gmtOffset_sec = long(tzOffset * 3600.0);
+  configTime(gmtOffset_sec, 0, "pool.ntp.org");
+  
+  struct tm timeinfo;
+  int attempts = 0;
+  while (!getLocalTime(&timeinfo) && attempts < 10) {
+    delay(500);
+    attempts++;
+  }
+  
+  if (getLocalTime(&timeinfo)) {
+    rtcHour = timeinfo.tm_hour;
+    rtcMin = timeinfo.tm_min;
+    rtcSec = timeinfo.tm_sec;
+    lastTimeUpdateMillis = millis();
+    clockSynced = true;
+    return true;
+  }
+  return false;
+}
+
+void runConfigPortal() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+  WiFi.softAP("Sniffer-Config");
+  
+  dnsServer.start(DNS_PORT, "*", apIP);
+  
+  server.on("/", handleRoot);
+  server.on("/save", HTTP_POST, handleSave);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  
+  canvas.fillScreen(FIX_BLACK);
+  canvas.setCursor(0, 5);
+  canvas.setTextColor(FIX_YELLOW);
+  canvas.print("WiFi Portal Active");
+  canvas.drawLine(0, 16, 160, 16, FIX_WHITE);
+  
+  canvas.setTextColor(FIX_WHITE);
+  canvas.setCursor(0, 24);
+  canvas.println("SSID: Sniffer-Config");
+  canvas.println("Open: 192.168.4.1");
+  canvas.println("on your phone/PC.");
+  canvas.println();
+  canvas.setTextColor(FIX_CYAN);
+  canvas.println("Press BOOT button");
+  canvas.println("to bypass setup.");
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+  
+  Serial.println("[PORTAL] AP started: Sniffer-Config");
+  Serial.println("[PORTAL] Browse to 192.168.4.1");
+  
+  while (true) {
+    dnsServer.processNextRequest();
+    server.handleClient();
+    
+    // Check if BOOT button is pressed to bypass
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      Serial.println("[PORTAL] Bypassed by button press.");
+      break;
+    }
+    delay(10);
+  }
+  
+  // Cleanup AP
+  dnsServer.stop();
+  server.stop();
+  WiFi.softAPdisconnect(true);
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(500);
-  Serial.println("\n==========================================");
-  Serial.println("[SYSTEM] ESP32 Wi-Fi Cybersecurity Sniffer");
-  Serial.println("[SYSTEM] Diagnostic Serial Debug Mode: ACTIVE");
-  Serial.println("==========================================\n");
+  Serial.println("[SYSTEM] setup() started");
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Initialize screen
+  // Initialize screen using Software SPI
+  Serial.println("[SYSTEM] Initializing Screen (Software SPI)...");
   tft.initR(INITR_BLACKTAB); 
+  Serial.println("[SYSTEM] Screen initialized!");
   tft.setRotation(1);
   tft.fillScreen(FIX_BLACK);
   
+  // Load credentials from Preferences
+  preferences.begin("wifi-config", false); // Read-write mode
+  String ssid = preferences.getString("ssid", "");
+  String pass = preferences.getString("pass", "");
+  float tzOffset = preferences.getFloat("tzOffset", 5.5);
+  if (ssid.length() == 0) {
+    ssid = "YOUR_SSID";
+    pass = "YOUR_PASSWORD";
+    preferences.putString("ssid", ssid);
+    preferences.putString("pass", pass);
+    preferences.putFloat("tzOffset", tzOffset);
+  }
+  preferences.end();
+  
+  bool connected = false;
+  if (ssid.length() > 0) {
+    connected = connectToWiFi(ssid, pass);
+    if (connected) {
+      if (syncNTP(tzOffset)) {
+        canvas.setTextColor(FIX_GREEN);
+        canvas.println("Time synced!");
+      } else {
+        canvas.setTextColor(FIX_RED);
+        canvas.println("NTP sync failed!");
+      }
+      tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+      delay(1500);
+    }
+  }
+  
+  if (!connected) {
+    // Start Web configuration portal if connection failed or no credentials
+    runConfigPortal();
+  }
+  
+  tft.fillScreen(FIX_BLACK);
   tft.setTextColor(FIX_GREEN);
   tft.setCursor(0, 5);
   tft.println("Auditor Sniffer Live...");
+  tft.drawLine(0, 16, 160, 16, FIX_WHITE);
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
   delay(1000);
 
+  // STA & Disconnect for Sniffer Mode
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
@@ -354,21 +574,207 @@ void setup() {
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+  Serial.println("[SYSTEM] setup() finished, entering loop()");
+}
+
+// OUI Lookup to find Device Manufacturer from the first 3 bytes of the MAC address
+const char* getVendor(uint8_t* mac) {
+  uint32_t oui = (mac[0] << 16) | (mac[1] << 8) | mac[2];
+  switch (oui) {
+    // Apple
+    case 0x5C013B: case 0xD8A01D: case 0xBCDDC2: case 0x002608: 
+    case 0x88E9FE: case 0x94E979: case 0x244B03: case 0xD4F278: 
+    case 0x404E36: case 0xF01898: case 0xF0B3EC: case 0xA45E60: 
+    case 0xF4CB52: case 0x2CD066: case 0x3408BC: case 0xD0D2B0: 
+    case 0xB418D1: case 0xAC7F3E:
+      return "Apple";
+      
+    // Samsung
+    case 0xF8E079: case 0xE4E0C5: case 0xCC6C59: case 0x7404F1:
+    case 0x04D6AA: case 0x0CFE45: case 0xD4A33D:
+      return "Samsung";
+
+    // Espressif
+    case 0x30AEA4: case 0xFCF5C4: case 0x18FE34: case 0x240AC4:
+    case 0x2C3AE8: case 0x308398: case 0x4C11AE: case 0x500291:
+    case 0x545A16: case 0x58CF79: case 0x600194: case 0x64B708:
+    case 0x68C63A: case 0x70B3D5: case 0x7C9EBD: case 0x807D3A:
+    case 0x840D8E: case 0x84F3EB: case 0x9097D5: case 0x90E202:
+    case 0x98CDAC: case 0xA020A6: case 0xA47B2C: case 0xAC67B2:
+    case 0xC049EF: case 0xC44F33: case 0xC82786: case 0xD8F15B:
+    case 0xE05A1B: case 0xE831CD: case 0xE868E7: case 0xE89F6D:
+    case 0xECFABC: case 0xF412FA: case 0xF4CFA2: case 0x1097BD:
+    case 0xACC048: case 0x40AE30: case 0x3C6AD2: case 0xEC2BEB:
+      return "Espressif";
+
+    // Intel
+    case 0x0013E8: case 0x001E67: case 0x0024D7: case 0xA438CC:
+    case 0x281878: case 0x3C6A9D: case 0x4851B5: case 0x705A0F:
+      return "Intel";
+
+    // Google
+    case 0xA0999B: case 0x001A11: case 0xE4A7A0: case 0x3C5AB6:
+      return "Google";
+
+    // OnePlus/Oppo
+    case 0xC0EEFB: case 0x980DE4: case 0x7C04D0:
+      return "Oppo/OnePlus";
+
+    // Xiaomi
+    case 0x9009DF: case 0x640980: case 0x50EC50: case 0x286C07:
+      return "Xiaomi";
+
+    // Huawei
+    case 0x001E10: case 0x00E0FC: case 0x24DF6A: case 0x283152:
+      return "Huawei";
+
+    // TP-Link
+    case 0x50C7BF: case 0xEC086B: case 0xF4F26D:
+      return "TP-Link";
+
+    // Netgear
+    case 0x000F66: case 0x00146C: case 0x001F33: case 0x0026F2:
+      return "Netgear";
+
+    default:
+      // If Locally Administered bit is set, it's a randomized MAC address
+      if (mac[0] & 0x02) {
+        return "Randomized";
+      }
+      return "Unknown";
+  }
+}
+
+// --- Button Control Function ---
+void handleButton() {
+  int buttonState = digitalRead(BUTTON_PIN);
+  unsigned long now = millis();
+  
+  if (buttonState == LOW) { // Button is pressed (Active LOW)
+    if (!buttonWasPressed) {
+      buttonPressStart = now;
+      buttonWasPressed = true;
+    }
+  } else { // Button is released
+    if (buttonWasPressed) {
+      unsigned long pressDuration = now - buttonPressStart;
+      buttonWasPressed = false;
+      
+      if (pressDuration > 1500) {
+        // --- LONG PRESS: Clear all tracked devices and reset auto-toggle ---
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+          trackedClients[i].active = false;
+        }
+        for (int i = 0; i < MAX_APS; i++) {
+          trackedAPs[i].active = false;
+        }
+        autoToggleMode = true; // Restore auto-toggle
+        
+        // Show reset screen
+        canvas.fillScreen(FIX_BLACK);
+        canvas.setCursor(15, 55);
+        canvas.setTextColor(FIX_RED);
+        canvas.print("--- RADAR RESET ---");
+        canvas.setCursor(10, 75);
+        canvas.setTextColor(FIX_WHITE);
+        canvas.print("All tracked devices");
+        canvas.setCursor(40, 87);
+        canvas.print("cleared!");
+        tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+        delay(1500);
+        
+        lastModeToggle = millis();
+      } else if (pressDuration > 50) {
+        // --- SHORT PRESS: Manual toggle, freeze auto-toggling ---
+        autoToggleMode = false;
+        
+        if (currentMode == CLIENTS_MODE) {
+          currentMode = APS_MODE;
+        } else if (currentMode == APS_MODE) {
+          currentMode = COMBINED_MODE;
+        } else if (currentMode == COMBINED_MODE) {
+          currentMode = RADAR_MODE;
+        } else {
+          currentMode = CLIENTS_MODE;
+        }
+        lastModeToggle = now;
+      }
+    }
+  }
+}
+
+// --- Real-time Clock Functions ---
+void handleSerial() {
+  static String inputBuffer = "";
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '\n') {
+      inputBuffer.trim();
+      if (inputBuffer.startsWith("TIME:")) {
+        int h = inputBuffer.substring(5, 7).toInt();
+        int m = inputBuffer.substring(8, 10).toInt();
+        int s = inputBuffer.substring(11, 13).toInt();
+        if (h >= 0 && h < 24 && m >= 0 && m < 60 && s >= 0 && s < 60) {
+          rtcHour = h;
+          rtcMin = m;
+          rtcSec = s;
+          lastTimeUpdateMillis = millis();
+          clockSynced = true;
+        }
+      }
+      inputBuffer = "";
+    } else if (c != '\r') {
+      inputBuffer += c;
+      if (inputBuffer.length() > 50) {
+        inputBuffer = "";
+      }
+    }
+  }
+}
+
+void getCurrentTime(int &h, int &m, int &s) {
+  if (!clockSynced) {
+    h = 0;
+    m = 0;
+    s = 0;
+    return;
+  }
+  unsigned long elapsed = millis() - lastTimeUpdateMillis;
+  unsigned long totalSeconds = rtcHour * 3600 + rtcMin * 60 + rtcSec + (elapsed / 1000);
+  h = (totalSeconds / 3600) % 24;
+  m = (totalSeconds / 60) % 60;
+  s = totalSeconds % 60;
+}
+
+void drawHeader(uint16_t textColor, const char* title) {
+  canvas.setCursor(0, 5);
+  canvas.setTextColor(textColor);
+  canvas.printf("CH:%d | %s", currentChannel, title);
+  
+  canvas.setCursor(112, 5);
+  canvas.setTextColor(FIX_WHITE);
+  if (clockSynced) {
+    int h, m, s;
+    getCurrentTime(h, m, s);
+    int h12 = h % 12;
+    if (h12 == 0) h12 = 12;
+    const char* ampm = (h >= 12) ? "PM" : "AM";
+    canvas.printf("%02d:%02d %s", h12, m, ampm);
+  } else {
+    canvas.print("--:-- --");
+  }
+  canvas.drawLine(0, 16, 160, 16, FIX_WHITE);
 }
 
 // Draws tracked clients and the SSIDs they are actively probing for
 void drawClients() {
   canvas.fillScreen(FIX_BLACK);
-  
-  canvas.setCursor(0, 5);
-  canvas.setTextColor(FIX_CYAN);
-  canvas.print("CH:"); canvas.print(currentChannel);
-  canvas.print(" | Client Probes");
-  canvas.drawLine(0, 16, 160, 16, FIX_WHITE);
+  drawHeader(FIX_CYAN, "Probes");
 
   int cursorY = 22;
   int count = 0;
   
+  // Copy and sort active client indices by RSSI
   int activeIndices[MAX_CLIENTS];
   int activeCount = 0;
   for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -385,9 +791,11 @@ void drawClients() {
     }
   }
 
+  // Draw top 6 strongest clients
   for (int i = 0; i < activeCount && count < 6; i++) {
     ClientDevice& d = trackedClients[activeIndices[i]];
     
+    // Set MAC line color based on RSSI strength
     if (d.rssi > -60) canvas.setTextColor(FIX_GREEN);
     else if (d.rssi > -80) canvas.setTextColor(FIX_YELLOW);
     else canvas.setTextColor(FIX_GRAY);
@@ -397,6 +805,7 @@ void drawClients() {
     canvas.setCursor(115, cursorY);
     canvas.printf("%ddBm", d.rssi);
 
+    // Draw the SSID the device is actively probing for, or device vendor
     canvas.setCursor(10, cursorY + 8);
     canvas.setTextColor(FIX_WHITE);
     if (strlen(d.probedSSID) > 0) {
@@ -410,22 +819,19 @@ void drawClients() {
     count++;
   }
 
+  // Push double-buffer frame to screen (Zero-Flicker)
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
 }
 
 // Draws detected Access Points, showing SSID, Encryption, Channel & Signal Strength
 void drawAPs() {
   canvas.fillScreen(FIX_BLACK);
-  
-  canvas.setCursor(0, 5);
-  canvas.setTextColor(FIX_YELLOW);
-  canvas.print("CH:"); canvas.print(currentChannel);
-  canvas.print(" | Access Points");
-  canvas.drawLine(0, 16, 160, 16, FIX_WHITE);
+  drawHeader(FIX_YELLOW, "APs");
 
   int cursorY = 22;
   int count = 0;
 
+  // Copy and sort active AP indices by RSSI
   int activeIndices[MAX_APS];
   int activeCount = 0;
   for (int i = 0; i < MAX_APS; i++) {
@@ -442,9 +848,11 @@ void drawAPs() {
     }
   }
 
+  // Draw top 6 strongest Access Points
   for (int i = 0; i < activeCount && count < 6; i++) {
     AccessPoint& d = trackedAPs[activeIndices[i]];
 
+    // Highlight insecure (OPEN/WEP) networks in red
     if (strcmp(d.encryption, "OPEN") == 0 || strcmp(d.encryption, "WEP") == 0) {
       canvas.setTextColor(FIX_RED);
     } else {
@@ -466,22 +874,19 @@ void drawAPs() {
     count++;
   }
 
+  // Push double-buffer frame to screen (Zero-Flicker)
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
 }
 
 // Draw the Combined Radar Screen showing all discovered MACs sorted by RSSI
 void drawCombined() {
   canvas.fillScreen(FIX_BLACK);
-  
-  canvas.setCursor(0, 5);
-  canvas.setTextColor(FIX_WHITE);
-  canvas.print("CH:"); canvas.print(currentChannel);
-  canvas.print(" | Combined Radar");
-  canvas.drawLine(0, 16, 160, 16, FIX_WHITE);
+  drawHeader(FIX_WHITE, "Combined");
 
   int cursorY = 22;
   int count = 0;
 
+  // Build unified list of devices
   struct UnifiedDevice {
     uint8_t mac[6];
     int rssi;
@@ -492,6 +897,7 @@ void drawCombined() {
   static UnifiedDevice devices[MAX_CLIENTS + MAX_APS];
   int totalDevices = 0;
 
+  // Add active APs
   for (int i = 0; i < MAX_APS; i++) {
     if (trackedAPs[i].active) {
       UnifiedDevice& ud = devices[totalDevices++];
@@ -502,6 +908,7 @@ void drawCombined() {
     }
   }
 
+  // Add active Clients
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (trackedClients[i].active) {
       UnifiedDevice& ud = devices[totalDevices++];
@@ -518,6 +925,7 @@ void drawCombined() {
     }
   }
 
+  // Sort unified list indices by RSSI (bubble sort)
   int indices[MAX_CLIENTS + MAX_APS];
   for (int i = 0; i < totalDevices; i++) indices[i] = i;
 
@@ -531,20 +939,23 @@ void drawCombined() {
     }
   }
 
+  // Draw top 6 strongest devices in range
   for (int i = 0; i < totalDevices && count < 6; i++) {
     UnifiedDevice& d = devices[indices[i]];
 
     if (d.isAP) {
-      canvas.setTextColor(FIX_YELLOW);
+      canvas.setTextColor(FIX_YELLOW); // Yellow for Access Points
     } else {
-      canvas.setTextColor(FIX_CYAN);
+      canvas.setTextColor(FIX_CYAN); // Cyan for Client Devices
     }
 
     canvas.setCursor(0, cursorY);
     canvas.printf("%02X:%02X:%02X:%02X:%02X:%02X", d.mac[0], d.mac[1], d.mac[2], d.mac[3], d.mac[4], d.mac[5]);
+    
     canvas.setCursor(115, cursorY);
     canvas.printf("%ddBm", d.rssi);
 
+    // Draw device classification name below it
     canvas.setCursor(10, cursorY + 8);
     canvas.setTextColor(FIX_WHITE);
     
@@ -557,10 +968,144 @@ void drawCombined() {
     count++;
   }
 
+  // Push double-buffer frame to screen
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+}
+
+// Draw visual Radar screen with rotating sweep line & RSSI distance blips
+void drawRadar() {
+  canvas.fillScreen(FIX_BLACK);
+  drawHeader(FIX_GREEN, "RADAR");
+
+  static float radarSweepAngle = 0.0f;
+  radarSweepAngle += 15.0f;
+  if (radarSweepAngle >= 360.0f) radarSweepAngle -= 360.0f;
+
+  const int radarCenterX = 40;
+  const int radarCenterY = 72;
+  const int radarRadius = 38;
+
+  // Draw Concentric Rings (Distance / RSSI circles)
+  canvas.drawCircle(radarCenterX, radarCenterY, radarRadius, FIX_GREEN);
+  canvas.drawCircle(radarCenterX, radarCenterY, radarRadius * 2 / 3, FIX_GRAY);
+  canvas.drawCircle(radarCenterX, radarCenterY, radarRadius / 3, FIX_GRAY);
+
+  // Draw Radar Crosshairs
+  canvas.drawFastHLine(radarCenterX - radarRadius, radarCenterY, radarRadius * 2, FIX_GRAY);
+  canvas.drawFastVLine(radarCenterX, radarCenterY - radarRadius, radarRadius * 2, FIX_GRAY);
+
+  // Draw Rotating Sweep Line
+  float rad = radarSweepAngle * 0.0174532925f; // DEG_TO_RAD
+  int sweepX = radarCenterX + (int)(cos(rad) * radarRadius);
+  int sweepY = radarCenterY + (int)(sin(rad) * radarRadius);
+  canvas.drawLine(radarCenterX, radarCenterY, sweepX, sweepY, FIX_GREEN);
+
+  // Vertical Divider line between Radar (Left) and Data Panel (Right)
+  canvas.drawFastVLine(82, 16, 112, FIX_WHITE);
+
+  // Build unified list of active devices (APs + Clients) sorted by RSSI
+  struct RadarItem {
+    uint8_t mac[6];
+    int rssi;
+    float dist;
+    char label[12];
+    uint16_t color;
+    bool isAP;
+  };
+  static RadarItem items[MAX_CLIENTS + MAX_APS];
+  int totalCount = 0;
+
+  // 1. Add active Access Points
+  for (int i = 0; i < MAX_APS; i++) {
+    if (trackedAPs[i].active && totalCount < (MAX_CLIENTS + MAX_APS)) {
+      RadarItem& item = items[totalCount++];
+      memcpy(item.mac, trackedAPs[i].bssid, 6);
+      item.rssi = trackedAPs[i].rssi;
+      item.dist = pow(10.0f, (-40.0f - (float)item.rssi) / 27.0f);
+      item.isAP = true;
+      snprintf(item.label, sizeof(item.label), "%02X%02X", item.mac[4], item.mac[5]);
+      item.color = FIX_YELLOW; // Yellow for Access Points
+    }
+  }
+
+  // 2. Add active Clients
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (trackedClients[i].active && totalCount < (MAX_CLIENTS + MAX_APS)) {
+      RadarItem& item = items[totalCount++];
+      memcpy(item.mac, trackedClients[i].mac, 6);
+      item.rssi = trackedClients[i].rssi;
+      item.dist = pow(10.0f, (-40.0f - (float)item.rssi) / 27.0f);
+      item.isAP = false;
+      snprintf(item.label, sizeof(item.label), "%02X%02X", item.mac[4], item.mac[5]);
+      item.color = (item.rssi > -60) ? FIX_GREEN : ((item.rssi > -80) ? FIX_CYAN : FIX_RED);
+    }
+  }
+
+  // Sort unified list by RSSI
+  for (int i = 0; i < totalCount - 1; i++) {
+    for (int j = 0; j < totalCount - i - 1; j++) {
+      if (items[j].rssi < items[j + 1].rssi) {
+        RadarItem temp = items[j];
+        items[j] = items[j + 1];
+        items[j + 1] = temp;
+      }
+    }
+  }
+
+  // Draw Blips on Radar (Circles for APs, Solid Dots for Clients)
+  for (int i = 0; i < totalCount; i++) {
+    int normR = map(constrain(items[i].rssi, -95, -30), -95, -30, radarRadius, 4);
+    uint32_t angleHash = (items[i].mac[3] ^ items[i].mac[4] ^ items[i].mac[5]) * 360 / 256;
+    float bRad = angleHash * 0.0174532925f;
+    int bx = radarCenterX + (int)(cos(bRad) * normR);
+    int by = radarCenterY + (int)(sin(bRad) * normR);
+
+    if (items[i].isAP) {
+      canvas.drawCircle(bx, by, 3, items[i].color); // Open circle for APs
+    } else {
+      canvas.fillCircle(bx, by, 2, items[i].color); // Solid dot for Clients
+    }
+  }
+
+  // Right Side Data Panel: Header & top 4 devices
+  canvas.setCursor(86, 20);
+  canvas.setTextColor(FIX_CYAN);
+  canvas.print("CLR DIST MAC");
+  canvas.drawFastHLine(86, 30, 74, FIX_GRAY);
+
+  int yPos = 34;
+  for (int i = 0; i < totalCount && i < 4; i++) {
+    // Blip color indicator (Circle outline for AP, Solid rect for Client)
+    if (items[i].isAP) {
+      canvas.drawCircle(88, yPos + 4, 3, items[i].color);
+    } else {
+      canvas.fillRect(86, yPos + 2, 5, 5, items[i].color);
+    }
+
+    // Distance in meters
+    canvas.setCursor(94, yPos);
+    canvas.setTextColor(FIX_WHITE);
+    if (items[i].dist < 10.0f) {
+      canvas.printf("%3.1fm", items[i].dist);
+    } else {
+      canvas.printf("%2.0fm ", items[i].dist);
+    }
+
+    // MAC suffix label
+    canvas.setCursor(132, yPos);
+    canvas.setTextColor(items[i].isAP ? FIX_YELLOW : FIX_GREEN);
+    canvas.print(items[i].label);
+
+    yPos += 22;
+  }
+
+  // Push double-buffer frame to screen
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
 }
 
 void loop() {
+  handleButton();
+  handleSerial();
   unsigned long now = millis();
 
   // 1. Channel Hopping (every 300ms)
@@ -583,12 +1128,14 @@ void loop() {
      }
   }
 
-  // 3. Auto-Toggle display mode every 5 seconds (alternates between Clients, APs, and Combined)
-  if (now - lastModeToggle > 5000) {
+  // 3. Auto-Toggle display mode every 5 seconds (if enabled)
+  if (autoToggleMode && (now - lastModeToggle > 5000)) {
     if (currentMode == CLIENTS_MODE) {
       currentMode = APS_MODE;
     } else if (currentMode == APS_MODE) {
       currentMode = COMBINED_MODE;
+    } else if (currentMode == COMBINED_MODE) {
+      currentMode = RADAR_MODE;
     } else {
       currentMode = CLIENTS_MODE;
     }
@@ -602,8 +1149,10 @@ void loop() {
       drawClients();
     } else if (currentMode == APS_MODE) {
       drawAPs();
-    } else {
+    } else if (currentMode == COMBINED_MODE) {
       drawCombined();
+    } else {
+      drawRadar();
     }
     lastUIDraw = now;
   }
