@@ -160,6 +160,7 @@ bool buttonWasPressed = false;
 
 bool liveSerialMonitor = true; // Active live stream for PuTTY
 bool hudSerialMode = false;     // Live clean HUD non-spam mode
+bool jsonSerialMode = false;    // Compact JSON Lines stream mode
 
 int rssiToPercentage(int rssi) {
     if (rssi <= -100) return 0;
@@ -185,8 +186,74 @@ void renderSignalBar(int sigPct, char* outBuf, size_t bufSize) {
     outBuf[idx] = '\0';
 }
 
+void logJsonClient(uint8_t* mac, int rssi, const char* ssid, bool isNew) {
+    if (!jsonSerialMode) return;
+    int h = 0, m = 0, s = 0;
+    getCurrentTime(h, m, s);
+    const char* vendor = getVendor(mac);
+    float dist = pow(10.0f, (-40.0f - (float)rssi) / 27.0f);
+
+    Serial.printf("{\"type\":\"client\",\"status\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\",\"rssi\":%d,\"dist\":%.1f,\"ch\":%d,\"probed\":\"%s\",\"time\":\"%02d:%02d:%02d\"}\r\n",
+                  isNew ? "new" : "update",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  vendor, rssi, dist, currentChannel,
+                  ssid ? ssid : "", h, m, s);
+}
+
+void logJsonAP(uint8_t* bssid, const char* ssid, int rssi, int channel, const char* enc, bool isNew) {
+    if (!jsonSerialMode) return;
+    int h = 0, m = 0, s = 0;
+    getCurrentTime(h, m, s);
+    float dist = pow(10.0f, (-40.0f - (float)rssi) / 27.0f);
+
+    Serial.printf("{\"type\":\"ap\",\"status\":\"%s\",\"bssid\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"ssid\":\"%s\",\"enc\":\"%s\",\"rssi\":%d,\"dist\":%.1f,\"ch\":%d,\"time\":\"%02d:%02d:%02d\"}\r\n",
+                  isNew ? "new" : "update",
+                  bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+                  ssid, enc, rssi, dist, channel, h, m, s);
+}
+
+void exportJsonDatabase() {
+    int h = 0, m = 0, s = 0;
+    getCurrentTime(h, m, s);
+
+    Serial.print("\r\n{\"timestamp\":\"");
+    Serial.printf("%02d:%02d:%02d", h, m, s);
+    Serial.print("\",\"channel\":");
+    Serial.print(currentChannel);
+    Serial.print(",\"clients\":[");
+
+    bool first = true;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (trackedClients[i].active) {
+            if (!first) Serial.print(",");
+            first = false;
+            float dist = pow(10.0f, (-40.0f - (float)trackedClients[i].rssi) / 27.0f);
+            const char* vendor = getVendor(trackedClients[i].mac);
+            Serial.printf("{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\",\"rssi\":%d,\"dist\":%.1f,\"probed\":\"%s\"}",
+                          trackedClients[i].mac[0], trackedClients[i].mac[1], trackedClients[i].mac[2],
+                          trackedClients[i].mac[3], trackedClients[i].mac[4], trackedClients[i].mac[5],
+                          vendor, trackedClients[i].rssi, dist, trackedClients[i].probedSSID);
+        }
+    }
+
+    Serial.print("],\"aps\":[");
+    first = true;
+    for (int i = 0; i < MAX_APS; i++) {
+        if (trackedAPs[i].active) {
+            if (!first) Serial.print(",");
+            first = false;
+            float dist = pow(10.0f, (-40.0f - (float)trackedAPs[i].rssi) / 27.0f);
+            Serial.printf("{\"bssid\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"ssid\":\"%s\",\"enc\":\"%s\",\"rssi\":%d,\"dist\":%.1f,\"ch\":%d}",
+                          trackedAPs[i].bssid[0], trackedAPs[i].bssid[1], trackedAPs[i].bssid[2],
+                          trackedAPs[i].bssid[3], trackedAPs[i].bssid[4], trackedAPs[i].bssid[5],
+                          trackedAPs[i].ssid, trackedAPs[i].encryption, trackedAPs[i].rssi, dist, trackedAPs[i].channel);
+        }
+    }
+    Serial.println("]}\r\n");
+}
+
 void logLiveClient(uint8_t* mac, int rssi, const char* ssid, bool isNew) {
-    if (!liveSerialMonitor || hudSerialMode) return;
+    if (!liveSerialMonitor || hudSerialMode || jsonSerialMode) return;
     int h = 0, m = 0, s = 0;
     getCurrentTime(h, m, s);
     const char* vendor = getVendor(mac);
@@ -208,7 +275,7 @@ void logLiveClient(uint8_t* mac, int rssi, const char* ssid, bool isNew) {
 }
 
 void logLiveAP(uint8_t* bssid, const char* ssid, int rssi, int channel, const char* enc, bool isNew) {
-    if (!liveSerialMonitor || hudSerialMode) return;
+    if (!liveSerialMonitor || hudSerialMode || jsonSerialMode) return;
     int h = 0, m = 0, s = 0;
     getCurrentTime(h, m, s);
     float dist = pow(10.0f, (-40.0f - (float)rssi) / 27.0f);
@@ -263,6 +330,7 @@ void update_client(uint8_t* mac, int rssi, const char* ssid, unsigned long now) 
   trackedClients[insertIdx].active = true;
 
   logLiveClient(mac, rssi, trackedClients[insertIdx].probedSSID, isNew);
+  logJsonClient(mac, rssi, trackedClients[insertIdx].probedSSID, isNew);
 }
 
 // Updates or inserts an Access Point in the tracker list
@@ -301,6 +369,7 @@ void update_ap(uint8_t* bssid, const char* ssid, int rssi, int channel, const ch
   trackedAPs[insertIdx].active = true;
 
   logLiveAP(bssid, ssid, rssi, trackedAPs[insertIdx].channel, enc, isNew);
+  logJsonAP(bssid, ssid, rssi, trackedAPs[insertIdx].channel, enc, isNew);
 }
 
 // Sniffer callback parses 802.11 management frames and active data frames
@@ -813,7 +882,27 @@ void processSerialCommand(String cmd) {
     Serial.printf("\r\n\033[32m[UI] Mode cycled to view #%d\033[0m\r\n", (int)currentMode + 1);
   } else if (cmd.equalsIgnoreCase("l")) {
     liveSerialMonitor = !liveSerialMonitor;
+    if (liveSerialMonitor) {
+      hudSerialMode = false;
+      jsonSerialMode = false;
+    }
     Serial.printf("\r\n\033[35m[SYSTEM] Live serial log stream: %s\033[0m\r\n", liveSerialMonitor ? "ENABLED" : "DISABLED");
+  } else if (cmd.equalsIgnoreCase("hud")) {
+    hudSerialMode = !hudSerialMode;
+    if (hudSerialMode) {
+      liveSerialMonitor = false;
+      jsonSerialMode = false;
+    }
+    Serial.printf("\r\n\033[32m[SYSTEM] Terminal HUD mode: %s\033[0m\r\n", hudSerialMode ? "ENABLED" : "DISABLED");
+  } else if (cmd.equalsIgnoreCase("j") || cmd.equalsIgnoreCase("json")) {
+    jsonSerialMode = !jsonSerialMode;
+    if (jsonSerialMode) {
+      liveSerialMonitor = false;
+      hudSerialMode = false;
+    }
+    Serial.printf("\r\n\033[33m[SYSTEM] JSON Lines stream mode: %s\033[0m\r\n", jsonSerialMode ? "ENABLED" : "DISABLED");
+  } else if (cmd.equalsIgnoreCase("db") || cmd.equalsIgnoreCase("export")) {
+    exportJsonDatabase();
   } else if (cmd.equalsIgnoreCase("auto")) {
     autoToggleMode = !autoToggleMode;
     Serial.printf("\r\n\033[32m[UI] Auto-toggle: %s\033[0m\r\n", autoToggleMode ? "ENABLED" : "DISABLED");
@@ -824,7 +913,10 @@ void processSerialCommand(String cmd) {
     Serial.println("  m 3 / m aps      : Switch TFT to ACCESS POINTS view");
     Serial.println("  m 4 / m combined : Switch TFT to COMBINED view");
     Serial.println("  m or mode        : Cycle to next TFT view");
-    Serial.println("  l                : Toggle live packet stream on/off");
+    Serial.println("  hud              : Toggle Live Terminal HUD Dashboard");
+    Serial.println("  j or json        : Toggle compact JSON Lines stream");
+    Serial.println("  db or export     : Dump full active database as JSON");
+    Serial.println("  l                : Toggle live text packet stream");
     Serial.println("  auto             : Toggle auto-view switching on/off");
     Serial.println("  TIME:HH:MM:SS    : Sync device time");
     Serial.println("----------------------------------------------------\r\n");
