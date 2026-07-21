@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <DNSServer.h>
+#include <HTTPClient.h>
 
 // --- Portal and Storage Variables ---
 WebServer server(80);
@@ -14,6 +15,100 @@ DNSServer dnsServer;
 Preferences preferences;
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
+
+String cloudDbUrl = "";
+unsigned long lastCloudSyncMillis = 0;
+
+const char* MOBILE_DASHBOARD_HTML = 
+"<!DOCTYPE html><html><head>"
+"<meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'>"
+"<title>WIFIMON V2 - Mobile Cyberpunk Radar</title>"
+"<style>"
+"body { background: #09090b; color: #f4f4f5; font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 12px; display: flex; flex-direction: column; align-items: center; }"
+".header { width: 100%; max-width: 480px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }"
+"h1 { font-size: 1.2rem; color: #06b6d4; margin: 0; font-weight: 800; letter-spacing: 1px; }"
+".badge { background: #22c55e; color: #000; padding: 4px 8px; border-radius: 4px; font-weight: 800; font-size: 0.85rem; }"
+".radar-box { width: 100%; max-width: 340px; height: 340px; position: relative; margin-bottom: 16px; background: #121215; border: 2px solid #27272a; border-radius: 50%; box-shadow: 0 0 20px rgba(6,182,212,0.15); overflow: hidden; }"
+"canvas { width: 100%; height: 100%; cursor: pointer; }"
+".controls { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }"
+".row { display: flex; gap: 8px; }"
+"input { flex: 1; padding: 10px; background: #18181b; border: 1px solid #27272a; border-radius: 6px; color: #fff; font-size: 0.9rem; }"
+"button { padding: 10px 16px; background: #06b6d4; border: none; border-radius: 6px; color: #000; font-weight: bold; cursor: pointer; }"
+"button.red { background: #ef4444; color: #fff; }"
+".card { width: 100%; max-width: 480px; background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 12px; box-sizing: border-box; }"
+".card-title { font-size: 0.9rem; color: #a1a1aa; font-weight: bold; margin-bottom: 8px; display: flex; justify-content: space-between; }"
+"table { width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left; }"
+"th, td { padding: 6px; border-bottom: 1px solid #27272a; }"
+"th { color: #06b6d4; }"
+".tag-ap { color: #eab308; font-weight: bold; }"
+".tag-cl { color: #06b6d4; font-weight: bold; }"
+"</style></head><body>"
+"<div class='header'><h1>⚡ WIFIMON RADAR V2</h1><div id='gradeBadge' class='badge'>Grade [A]</div></div>"
+"<div class='radar-box'><canvas id='radar' width='340' height='340'></canvas></div>"
+"<div class='controls'>"
+"<div class='row'><input type='text' id='targetMacInput' placeholder='Lock Target MAC (XX:XX:XX:XX:XX:XX)'><button onclick='lockMac()'>Lock</button><button class='red' onclick='unlockMac()'>Unlock</button></div>"
+"<div class='row'><input type='url' id='cloudUrlInput' placeholder='Firebase/Cloud DB Endpoint URL'><button onclick='saveCloudUrl()'>Sync Cloud</button></div>"
+"<div class='row'><button class='red' style='flex:1;' onclick='resetDb()'>Reset Radar Database</button></div>"
+"</div>"
+"<div class='card'>"
+"<div class='card-title'><span>SENSED DEVICES</span><span id='devCount'>0 Devices</span></div>"
+"<table><thead><tr><th>Type</th><th>Name / Vendor</th><th>Dist</th><th>Action</th></tr></thead>"
+"<tbody id='deviceTable'></tbody></table>"
+"</div>"
+"<script>"
+"let blips = []; let targetMac = ''; let targetLockActive = false;"
+"function drawRadar(angle) {"
+"  const cvs = document.getElementById('radar'); const ctx = cvs.getContext('2d');"
+"  const cx = 170, cy = 170, maxR = 160;"
+"  ctx.fillStyle = '#09090b'; ctx.fillRect(0,0,340,340);"
+"  ctx.strokeStyle = '#27272a'; ctx.lineWidth = 1;"
+"  [maxR/4, maxR/2, (maxR*3)/4, maxR].forEach(r => { ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.stroke(); });"
+"  ctx.beginPath(); ctx.moveTo(cx-maxR, cy); ctx.lineTo(cx+maxR, cy); ctx.stroke();"
+"  ctx.beginPath(); ctx.moveTo(cx, cy-maxR); ctx.lineTo(cx, cy+maxR); ctx.stroke();"
+"  const rad = angle * Math.PI / 180;"
+"  ctx.strokeStyle = '#06b6d4'; ctx.lineWidth = 2;"
+"  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(rad)*maxR, cy + Math.sin(rad)*maxR); ctx.stroke();"
+"  blips.forEach(b => {"
+"    const r = Math.min(maxR, Math.max(10, (b.dist / 50) * maxR));"
+"    const bx = cx + Math.cos(b.angle) * r; const by = cy + Math.sin(b.angle) * r;"
+"    ctx.fillStyle = b.isAP ? '#eab308' : (b.dist < 5 ? '#22c55e' : '#06b6d4');"
+"    ctx.beginPath(); ctx.arc(bx, by, b.isAP ? 6 : 5, 0, 2*Math.PI); ctx.fill();"
+"    if (targetLockActive && b.mac === targetMac) {"
+"      ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2;"
+"      ctx.beginPath(); ctx.arc(bx, by, 12, 0, 2*Math.PI); ctx.stroke();"
+"      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(bx, by); ctx.stroke();"
+"    }"
+"  });"
+"}"
+"let sweepAngle = 0;"
+"setInterval(() => { sweepAngle = (sweepAngle + 4) % 360; drawRadar(sweepAngle); }, 50);"
+"async function updateData() {"
+"  try {"
+"    const res = await fetch('/api/data'); const d = await res.json();"
+"    document.getElementById('gradeBadge').innerText = 'Grade [' + d.threatGrade + ']';"
+"    document.getElementById('devCount').innerText = d.devicesCount + ' Devices';"
+"    targetLockActive = d.targetLockActive; targetMac = d.targetMac;"
+"    blips = []; let html = '';"
+"    d.devices.forEach(item => {"
+"      const angle = (item.hash % 360) * Math.PI / 180;"
+"      blips.push({ mac: item.mac, dist: item.dist, angle: angle, isAP: item.isAP });"
+"      html += `<tr>` +"
+"        `<td class='${item.isAP ? 'tag-ap' : 'tag-cl'}'>${item.isAP ? 'AP' : 'CL'}</td>` +"
+"        `<td><b>${item.name}</b><br><small style='color:#71717a;'>${item.mac}</small></td>` +"
+"        `<td>${item.dist.toFixed(1)}m</td>` +"
+"        `<td><button onclick=\"setTarget('${item.mac}')\">Lock</button></td>` +"
+"      `</tr>`;"
+"    });"
+"    document.getElementById('deviceTable').innerHTML = html;"
+"  } catch(e) {}"
+"}"
+"setInterval(updateData, 500);"
+"async function setTarget(mac) { document.getElementById('targetMacInput').value = mac; await fetch('/api/lock?mac=' + mac, { method: 'POST' }); }"
+"async function lockMac() { const mac = document.getElementById('targetMacInput').value; if(mac) await setTarget(mac); }"
+"async function unlockMac() { await fetch('/api/unlock', { method: 'POST' }); }"
+"async function resetDb() { await fetch('/api/reset', { method: 'POST' }); }"
+"async function saveCloudUrl() { const url = document.getElementById('cloudUrlInput').value; await fetch('/api/cloud?url=' + encodeURIComponent(url), { method: 'POST' }); alert('Cloud URL Saved!'); }"
+"</script></body></html>";
 
 const char* CONFIG_HTML = 
 "<!DOCTYPE html>"
@@ -659,6 +754,131 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
   }
 }
 
+// --- Mobile Web Dashboard & REST API Handlers ---
+void handleMobileDashboard() {
+  server.send(200, "text/html", MOBILE_DASHBOARD_HTML);
+}
+
+void handleApiData() {
+  char grade = 'A';
+  int threatScore = calculateThreatScore(grade);
+
+  String json = "{\"threatGrade\":\"" + String(grade) + "\",";
+  json += "\"targetLockActive\":" + String(targetLockActive ? "true" : "false") + ",";
+  char targetStr[18];
+  snprintf(targetStr, sizeof(targetStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           target_mac[0], target_mac[1], target_mac[2], target_mac[3], target_mac[4], target_mac[5]);
+  json += "\"targetMac\":\"" + String(targetStr) + "\",";
+
+  int activeCount = 0;
+  String devJson = "[";
+  
+  for (int i = 0; i < MAX_APS; i++) {
+    if (trackedAPs[i].active) {
+      if (activeCount > 0) devJson += ",";
+      float dist = pow(10.0f, (-40.0f - (float)trackedAPs[i].rssi) / 27.0f);
+      uint32_t hash = (trackedAPs[i].bssid[3] ^ trackedAPs[i].bssid[4] ^ trackedAPs[i].bssid[5]) * 360 / 256;
+      char bssidStr[18];
+      snprintf(bssidStr, sizeof(bssidStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               trackedAPs[i].bssid[0], trackedAPs[i].bssid[1], trackedAPs[i].bssid[2],
+               trackedAPs[i].bssid[3], trackedAPs[i].bssid[4], trackedAPs[i].bssid[5]);
+      
+      devJson += "{\"isAP\":true,\"mac\":\"" + String(bssidStr) + "\",\"name\":\"" + String(trackedAPs[i].ssid) + "\",\"dist\":" + String(dist, 1) + ",\"hash\":" + String(hash) + "}";
+      activeCount++;
+    }
+  }
+
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (trackedClients[i].active) {
+      if (activeCount > 0) devJson += ",";
+      float dist = pow(10.0f, (-40.0f - (float)trackedClients[i].rssi) / 27.0f);
+      uint32_t hash = (trackedClients[i].mac[3] ^ trackedClients[i].mac[4] ^ trackedClients[i].mac[5]) * 360 / 256;
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               trackedClients[i].mac[0], trackedClients[i].mac[1], trackedClients[i].mac[2],
+               trackedClients[i].mac[3], trackedClients[i].mac[4], trackedClients[i].mac[5]);
+      String name = (strlen(trackedClients[i].probedSSID) > 0) ? String(trackedClients[i].probedSSID) : String(getVendor(trackedClients[i].mac));
+      
+      devJson += "{\"isAP\":false,\"mac\":\"" + String(macStr) + "\",\"name\":\"" + name + "\",\"dist\":" + String(dist, 1) + ",\"hash\":" + String(hash) + "}";
+      activeCount++;
+    }
+  }
+  devJson += "]";
+
+  json += "\"devicesCount\":" + String(activeCount) + ",";
+  json += "\"devices\":" + devJson + "}";
+
+  server.send(200, "application/json", json);
+}
+
+void handleApiLock() {
+  String macStr = server.arg("mac");
+  macStr.trim();
+  int parsed[6];
+  if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x", &parsed[0], &parsed[1], &parsed[2], &parsed[3], &parsed[4], &parsed[5]) == 6) {
+    for (int k = 0; k < 6; k++) target_mac[k] = (uint8_t)parsed[k];
+    targetLockActive = true;
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+  } else {
+    server.send(400, "application/json", "{\"error\":\"invalid mac\"}");
+  }
+}
+
+void handleApiUnlock() {
+  targetLockActive = false;
+  server.send(200, "application/json", "{\"status\":\"unlocked\"}");
+}
+
+void handleApiReset() {
+  for (int i = 0; i < MAX_CLIENTS; i++) trackedClients[i].active = false;
+  for (int i = 0; i < MAX_APS; i++) trackedAPs[i].active = false;
+  targetLockActive = false;
+  server.send(200, "application/json", "{\"status\":\"reset\"}");
+}
+
+void handleApiCloud() {
+  String url = server.arg("url");
+  url.trim();
+  cloudDbUrl = url;
+  preferences.begin("wifi-config", false);
+  preferences.putString("cloudUrl", cloudDbUrl);
+  preferences.end();
+  server.send(200, "application/json", "{\"status\":\"saved\"}");
+}
+
+void syncCloudDatabase() {
+  if (cloudDbUrl.length() == 0) return;
+  unsigned long now = millis();
+  if (now - lastCloudSyncMillis < 5000) return; // Sync every 5 seconds
+  lastCloudSyncMillis = now;
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(cloudDbUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String payload = "{";
+    payload += "\"device\":\"ESP32_WIFIMON\",";
+    payload += "\"activeDevices\":[";
+    int count = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (trackedClients[i].active) {
+        if (count > 0) payload += ",";
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 trackedClients[i].mac[0], trackedClients[i].mac[1], trackedClients[i].mac[2],
+                 trackedClients[i].mac[3], trackedClients[i].mac[4], trackedClients[i].mac[5]);
+        payload += "{\"mac\":\"" + String(macStr) + "\",\"rssi\":" + String(trackedClients[i].rssi) + "}";
+        count++;
+      }
+    }
+    payload += "]}";
+
+    http.POST(payload);
+    http.end();
+  }
+}
+
 // --- Captive Portal & NTP Helper Functions ---
 void handleRoot() {
   server.send(200, "text/html", CONFIG_HTML);
@@ -857,17 +1077,32 @@ void setup() {
   tft.println("Auditor Sniffer Live...");
   tft.drawLine(0, 16, 160, 16, FIX_WHITE);
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
-  delay(1000);
+  // Load saved cloudUrl from Preferences
+  preferences.begin("wifi-config", true);
+  cloudDbUrl = preferences.getString("cloudUrl", "");
+  preferences.end();
 
-  // STA & Disconnect for Sniffer Mode
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
+  // Dual AP + STA Mode for Mobile Web Dashboard & Sniffer
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+  WiFi.softAP("WIFIMON-Radar", "radar1234");
+  dnsServer.start(DNS_PORT, "*", apIP);
+
+  server.on("/", handleMobileDashboard);
+  server.on("/dashboard", handleMobileDashboard);
+  server.on("/api/data", HTTP_GET, handleApiData);
+  server.on("/api/lock", HTTP_POST, handleApiLock);
+  server.on("/api/unlock", HTTP_POST, handleApiUnlock);
+  server.on("/api/reset", HTTP_POST, handleApiReset);
+  server.on("/api/cloud", HTTP_POST, handleApiCloud);
+  server.onNotFound(handleNotFound);
+  server.begin();
 
   currentMode = RADAR_MODE;
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+  Serial.println("[SYSTEM] Mobile Web Radar AP active: WIFIMON-Radar (Password: radar1234, IP: 192.168.4.1)");
   Serial.println("[SYSTEM] setup() finished, entering loop()");
 }
 
@@ -1687,6 +1922,10 @@ void drawConsoleHUD() {
 void loop() {
   handleButton();
   handleSerial();
+  server.handleClient();
+  dnsServer.processNextRequest();
+  syncCloudDatabase();
+  
   unsigned long now = millis();
 
   // 1. Channel Hopping (every 300ms)
