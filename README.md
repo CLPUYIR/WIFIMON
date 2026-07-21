@@ -9,7 +9,26 @@ An active Wi-Fi packet analyzer and passive device tracker designed for the ESP3
 
 ---
 
-## 🚀 Key Features
+## ⚡ WIFIMON V2 - Cyberpunk Visual Telemetry Edition (`/v2_cyberpunk`)
+
+WIFIMON V2 introduces a high-density **360° Cyberpunk Radar Engine** built on double-buffered GFX canvas rendering:
+
+* **Max-Area 360° Radar Scope (Radius 46px / 92px Diameter):** Uses 100% of available screen height (`Y: 19` to `111`) to plot up to **60 simultaneous active devices** (APs + Clients) in real time based on logarithmic RSSI distance and angular hash.
+* **Pixel-Perfect Telemetry Header (`[A] 14D 46m 08:41P`):**
+  * **Airspace Threat Grade (`[A]`):** Automated security index (`[A]`, `[B]`, `[C]`, `[D]`, `[F]`) evaluating open AP ratios and probe request activity.
+  * **Unique Active Device Counter (`14D`):** Displays the total number of unique active Wi-Fi devices currently sensed by the ESP32.
+  * **Farthest Device Distance (`46m`):** Telemetry readout of the farthest detected device distance in meters.
+  * **Real-Time Clock (`08:41P`):** Real-time clock display with 12h AM/PM indicator.
+* **Smooth Lerp Channel Hopping Tape:** Header top-right features a fluid, lerp-interpolated horizontal scrolling tape sliding channel numbers 1–13 continuously as the sniffer hops channels.
+* **Target Lock Vector Mode (`lock XX:XX:XX:XX:XX:XX`):** Draws a red dashed vector line from the radar origin to the locked target, with a spinning dual-ring crosshair.
+* **Pulsing Encryption Halos:** Unencrypted `OPEN` or `WEP` networks pulse with a warning red halo (`sin(millis())`) around their radar blips.
+* **Comet Motion Trails:** Active transmitting devices leave fading motion tails behind their radar blips.
+* **MAC Randomization Triangles:** Devices using privacy MAC randomization (`mac[0] & 0x02`) render as hollow triangles instead of solid circles.
+* **Fast Probed SSID Marquee Ticker:** Bottom 10px scrolling marquee ticker displaying `[!] MAC -> SSID` probe requests at high speed.
+
+---
+
+## 🚀 Key Features (V1 Base)
 
 *   **Visual 360° Circular Radar Display (Default Boot View):** Features a real-time rotating radar sweep animation that maps surrounding devices in 2D space based on RSSI signal strength and MAC hash orientation. Displays SSIDs and OUI Vendor names directly on the radar screen.
     *   **Access Points (Routers):** Rendered as open yellow circles (`AP:` prefix).
