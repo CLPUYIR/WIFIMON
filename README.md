@@ -28,6 +28,27 @@ WIFIMON V2 introduces a high-density **360° Cyberpunk Radar Engine** built on d
 
 ---
 
+## 📡 WIFIMON V3 - Hybrid Wi-Fi & Bluetooth BLE Radar (`/v3_hybrid`)
+
+WIFIMON V3 expands the sniffer into a **Dual-Radio Hybrid 2.4GHz Airspace Monitor**, actively capturing both **802.11 Wi-Fi frames** and **Bluetooth Low Energy (BLE)** advertisement packets simultaneously:
+
+* **Dual-Radio Sniffing Architecture:**
+  * **Wi-Fi 802.11 Promiscuous Sniffer:** Sniffs Probe Requests, Beacons, and Active Data Frames across channels 1–13.
+  * **Bluetooth BLE GAP Scanner:** Sniffs BLE advertisements from surrounding devices (AirPods, Smartwatches, AirTags, Tile Trackers, Smart Home devices, OBD-II scanners).
+  * **BLE Company & Protocol Decoder:** Identifies Apple Continuity / iBeacon (`0x004C`), Samsung SmartThings (`0x0075`), Google Fast Pair (`0x00E0`), Microsoft (`0x0006`), Tile (`0x0041`), and Espressif (`0x02E5`).
+* **10-Second Auto-Cycling Display (TFT & Web App):**
+  * Automatically switches screen views every **10 seconds** between **Wi-Fi Radar** (Cyan/Yellow) and **Bluetooth BLE Radar** (Neon Magenta/Blue).
+  * **Wi-Fi Mode (10s):** Header reads `WF:14D 46m 08:41P`, displaying APs and Client blips.
+  * **Bluetooth BLE Mode (10s):** Header reads `BT:12D 35m 08:41P`, displaying BLE device names, vendors, and distance telemetry.
+* **Hybrid Mobile Web App (`http://192.168.4.1`):**
+  * Connect your phone to `WIFIMON-Radar` to launch an interactive 2D Radar with mode tabs: **`[Wi-Fi (10s)]`**, **`[BLE (10s)]`**, and **`[Auto-Cycle]`**.
+  * View real-time Wi-Fi & Bluetooth device tables with distance estimates (m) and single-tap **Target Locking (`lock MAC`)**.
+* **Cloud Database Uploader:**
+  * Background worker posts combined Wi-Fi & Bluetooth JSON telemetry payloads directly to Firebase, Supabase, or REST webhooks every 5 seconds.
+* **Partition Scheme:** Compiles under **`PartitionScheme=huge_app`** (3MB Flash program storage) to comfortably accommodate full Wi-Fi, BLE, and Web Server stacks.
+
+---
+
 ## 🚀 Key Features (V1 Base)
 
 *   **Visual 360° Circular Radar Display (Default Boot View):** Features a real-time rotating radar sweep animation that maps surrounding devices in 2D space based on RSSI signal strength and MAC hash orientation. Displays SSIDs and OUI Vendor names directly on the radar screen.
