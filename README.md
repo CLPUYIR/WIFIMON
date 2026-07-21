@@ -93,6 +93,8 @@ Send commands over serial at **115200 baud** to switch TFT display views and ter
 | Command | Action |
 | :--- | :--- |
 | `hud` | Toggle non-spam **Live Terminal HUD Dashboard** (1s auto-refresh) |
+| `j` or `json` | Toggle compact **JSON Lines Streaming Mode** (`.jsonl`) |
+| `db` or `export` | Dump full current active device database as a **Single JSON Object** |
 | `l` | Toggle **Raw Serial Packet Logging Stream** |
 | `m 1` or `m radar` | Switch TFT screen to **Visual Radar Mode** |
 | `m 2` or `m clients` | Switch TFT screen to **Probes / Clients Mode** |
