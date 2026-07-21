@@ -159,6 +159,7 @@ unsigned long buttonPressStart = 0;
 bool buttonWasPressed = false;
 
 bool liveSerialMonitor = true; // Active live stream for PuTTY
+bool hudSerialMode = false;     // Live clean HUD non-spam mode
 
 int rssiToPercentage(int rssi) {
     if (rssi <= -100) return 0;
@@ -166,8 +167,26 @@ int rssiToPercentage(int rssi) {
     return (int)((rssi + 100) * 1.42857f);
 }
 
+void renderSignalBar(int sigPct, char* outBuf, size_t bufSize) {
+    int bars = sigPct / 10;
+    if (bars > 10) bars = 10;
+    if (bars < 0) bars = 0;
+    
+    int idx = 0;
+    outBuf[idx++] = '[';
+    for (int b = 0; b < 10; b++) {
+        if (b < bars) {
+            outBuf[idx++] = '=';
+        } else {
+            outBuf[idx++] = '-';
+        }
+    }
+    outBuf[idx++] = ']';
+    outBuf[idx] = '\0';
+}
+
 void logLiveClient(uint8_t* mac, int rssi, const char* ssid, bool isNew) {
-    if (!liveSerialMonitor) return;
+    if (!liveSerialMonitor || hudSerialMode) return;
     int h = 0, m = 0, s = 0;
     getCurrentTime(h, m, s);
     const char* vendor = getVendor(mac);
@@ -189,7 +208,7 @@ void logLiveClient(uint8_t* mac, int rssi, const char* ssid, bool isNew) {
 }
 
 void logLiveAP(uint8_t* bssid, const char* ssid, int rssi, int channel, const char* enc, bool isNew) {
-    if (!liveSerialMonitor) return;
+    if (!liveSerialMonitor || hudSerialMode) return;
     int h = 0, m = 0, s = 0;
     getCurrentTime(h, m, s);
     float dist = pow(10.0f, (-40.0f - (float)rssi) / 27.0f);
@@ -1198,7 +1217,127 @@ void drawRadar() {
   }
 
   // Push double-buffer frame to screen
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
+// Render non-spamming Live Terminal HUD Dashboard
+void drawConsoleHUD() {
+    if (!hudSerialMode) return;
+    
+    // ANSI clear screen & move cursor to home (top left)
+    Serial.print("\033[2J\033[H");
+
+    int h = 0, m = 0, s = 0;
+    getCurrentTime(h, m, s);
+    uint32_t uptimeSec = millis() / 1000;
+    uint32_t upH = uptimeSec / 3600;
+    uint32_t upM = (uptimeSec / 60) % 60;
+    uint32_t upS = uptimeSec % 60;
+
+    // Header
+    Serial.println("\033[1;36m========================================================================================\033[0m");
+    Serial.printf("\033[1;37m [ESP32 WIFIMON HUD] Time: %02d:%02d:%02d | Uptime: %02lu:%02lu:%02lu | Heap: %u KB | CH: %d\033[0m\r\n",
+                  h, m, s, upH, upM, upS, ESP.getFreeHeap() / 1024, currentChannel);
+    Serial.println("\033[1;36m========================================================================================\033[0m");
+    Serial.println("\033[1;33m TOP CLOSEST DEVICES (Proximity Sorted):\033[0m");
+    Serial.println(" --------------------------------------------------------------------------------------");
+    Serial.printf(" \033[1;37m%-11s %-4s %-18s %-14s %-8s %-6s %-12s %s\033[0m\r\n",
+                  "PROXIMITY", "TYPE", "MAC/BSSID", "VENDOR/NAME", "RSSI", "DIST", "SIGNAL BAR", "TARGET SSID / SECURITY");
+    Serial.println(" --------------------------------------------------------------------------------------");
+
+    // Unified Device List
+    struct HUDDevice {
+        uint8_t mac[6];
+        int rssi;
+        float dist;
+        char name[18];
+        char detail[33];
+        bool isAP;
+    };
+    static HUDDevice items[MAX_CLIENTS + MAX_APS];
+    int totalCount = 0;
+    int openAPCount = 0;
+
+    // 1. APs
+    for (int i = 0; i < MAX_APS; i++) {
+        if (trackedAPs[i].active && totalCount < (MAX_CLIENTS + MAX_APS)) {
+            HUDDevice& d = items[totalCount++];
+            memcpy(d.mac, trackedAPs[i].bssid, 6);
+            d.rssi = trackedAPs[i].rssi;
+            d.dist = pow(10.0f, (-40.0f - (float)d.rssi) / 27.0f);
+            d.isAP = true;
+            strncpy(d.name, trackedAPs[i].ssid, 17);
+            d.name[17] = '\0';
+            snprintf(d.detail, sizeof(d.detail), "[%s]", trackedAPs[i].encryption);
+
+            if (strcmp(trackedAPs[i].encryption, "OPEN") == 0 || strcmp(trackedAPs[i].encryption, "WEP") == 0) {
+                openAPCount++;
+            }
+        }
+    }
+
+    // 2. Clients
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (trackedClients[i].active && totalCount < (MAX_CLIENTS + MAX_APS)) {
+            HUDDevice& d = items[totalCount++];
+            memcpy(d.mac, trackedClients[i].mac, 6);
+            d.rssi = trackedClients[i].rssi;
+            d.dist = pow(10.0f, (-40.0f - (float)d.rssi) / 27.0f);
+            d.isAP = false;
+            const char* vendor = getVendor(d.mac);
+            strncpy(d.name, vendor, 17);
+            d.name[17] = '\0';
+
+            if (strlen(trackedClients[i].probedSSID) > 0) {
+                snprintf(d.detail, sizeof(d.detail), "> %s", trackedClients[i].probedSSID);
+            } else {
+                d.detail[0] = '\0';
+            }
+        }
+    }
+
+    // Sort by RSSI
+    for (int i = 0; i < totalCount - 1; i++) {
+        for (int j = 0; j < totalCount - i - 1; j++) {
+            if (items[j].rssi < items[j + 1].rssi) {
+                HUDDevice temp = items[j];
+                items[j] = items[j + 1];
+                items[j + 1] = temp;
+            }
+        }
+    }
+
+    // Render top 8
+    for (int i = 0; i < totalCount && i < 8; i++) {
+        HUDDevice& d = items[i];
+        int sigPct = rssiToPercentage(d.rssi);
+
+        const char* proxTag = "\033[31m[FAR]      \033[0m";
+        if (d.dist < 3.0f) {
+            proxTag = "\033[1;32m[IMMEDIATE]\033[0m";
+        } else if (d.dist < 10.0f) {
+            proxTag = "\033[1;33m[NEARBY]   \033[0m";
+        }
+
+        char sigBar[16];
+        renderSignalBar(sigPct, sigBar, sizeof(sigBar));
+
+        const char* typeColor = d.isAP ? "\033[1;35mAP\033[0m" : "\033[1;36mCL\033[0m";
+        const char* rssiColor = (d.rssi > -60) ? "\033[32m" : ((d.rssi > -80) ? "\033[33m" : "\033[31m");
+
+        Serial.printf(" %s %s %02X:%02X:%02X:%02X:%02X:%02X %-14s %s%3ddBm\033[0m %4.1fm \033[32m%-12s\033[0m %s\r\n",
+                      proxTag, typeColor,
+                      d.mac[0], d.mac[1], d.mac[2], d.mac[3], d.mac[4], d.mac[5],
+                      d.name, rssiColor, d.rssi, d.dist, sigBar, d.detail);
+    }
+
+    if (totalCount == 0) {
+        Serial.println("  \033[33mScanning... No active devices detected on current channel.\033[0m");
+    }
+
+    // Footer Stats
+    Serial.println("\033[1;36m========================================================================================\033[0m");
+    Serial.printf(" \033[1;37mActive Clients: %d | Active APs: %d | Vulnerable/Open APs: %s%d\033[1;37m | HUD Auto-Refresh: 1s\033[0m\r\n",
+                  MAX_CLIENTS, MAX_APS, (openAPCount > 0) ? "\033[1;31m" : "\033[32m", openAPCount);
+    Serial.println("\033[1;36m========================================================================================\033[0m");
+    Serial.println(" \033[90mCommands: 'hud' (toggle HUD), 'l' (raw stream), 'm 1-4' (TFT views), 'h' (help)\033[0m\r\n");
 }
 
 void loop() {
@@ -1253,5 +1392,12 @@ void loop() {
       drawRadar();
     }
     lastUIDraw = now;
+  }
+
+  // 5. Refresh Terminal Console HUD (every 1 second)
+  static unsigned long lastHUDDraw = 0;
+  if (now - lastHUDDraw >= 1000) {
+    drawConsoleHUD();
+    lastHUDDraw = now;
   }
 }
