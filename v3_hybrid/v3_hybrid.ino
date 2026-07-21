@@ -263,12 +263,12 @@ void update_ble(uint8_t* mac, int rssi, const char* name, const char* vendor, ui
   // Device type classification
   const char* typeStr = "BLE";
   if (companyId == 0x004C) {
-    if (strstr(name, "AirPods") || strstr(name, "Beats")) typeStr = "AUDIO";
-    else if (strstr(name, "Watch")) typeStr = "WATCH";
+    if (name && (strstr(name, "AirPods") || strstr(name, "Beats"))) typeStr = "AUDIO";
+    else if (name && strstr(name, "Watch")) typeStr = "WATCH";
     else typeStr = "APPLE";
   } else if (companyId == 0x0075) {
-    if (strstr(name, "Buds")) typeStr = "AUDIO";
-    else if (strstr(name, "Watch") || strstr(name, "Galaxy")) typeStr = "WATCH";
+    if (name && strstr(name, "Buds")) typeStr = "AUDIO";
+    else if (name && (strstr(name, "Watch") || strstr(name, "Galaxy"))) typeStr = "WATCH";
     else typeStr = "SAMSG";
   } else if (companyId == 0x00E0) {
     typeStr = "GGL";
@@ -277,15 +277,22 @@ void update_ble(uint8_t* mac, int rssi, const char* name, const char* vendor, ui
   } else if (companyId == 0x02E5) {
     typeStr = "ESP32";
   } else {
-    if (strstr(name, "Audio") || strstr(name, "Buds") || strstr(name, "Head") || strstr(name, "Sound") || strstr(name, "JBL") || strstr(name, "Sony")) typeStr = "AUDIO";
-    else if (strstr(name, "Watch") || strstr(name, "Band") || strstr(name, "Fit")) typeStr = "WATCH";
-    else if (strstr(name, "Tag") || strstr(name, "Beacon")) typeStr = "BEACON";
+    if (name) {
+      if (strstr(name, "Audio") || strstr(name, "Buds") || strstr(name, "Head") || strstr(name, "Sound") || strstr(name, "JBL") || strstr(name, "Sony")) typeStr = "AUDIO";
+      else if (strstr(name, "Watch") || strstr(name, "Band") || strstr(name, "Fit")) typeStr = "WATCH";
+      else if (strstr(name, "Tag") || strstr(name, "Beacon")) typeStr = "BEACON";
+    }
   }
   strncpy(trackedBLE[insertIdx].devType, typeStr, 7);
   trackedBLE[insertIdx].devType[7] = '\0';
 
   trackedBLE[insertIdx].lastSeen = now;
   trackedBLE[insertIdx].active = true;
+
+  Serial.printf("[BLE DETECTED] %02X:%02X:%02X:%02X:%02X:%02X | Name: %-16s | Type: %-6s | Dist: %.1fm (%ddBm)\r\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                trackedBLE[insertIdx].name, trackedBLE[insertIdx].devType,
+                trackedBLE[insertIdx].dist, rssi);
 }
 
 // Sniffer callback parses 802.11 management frames and active data frames
@@ -391,12 +398,11 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type) {
 // BLE Scan Callbacks
 class MyBLEAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
-      uint8_t* nativeAddr = advertisedDevice.getAddress().getNative();
+      String addrStr = advertisedDevice.getAddress().toString();
       uint8_t mac[6] = {0};
-      if (nativeAddr) {
-        memcpy(mac, nativeAddr, 6);
-      } else {
-        return;
+      int parsed[6];
+      if (sscanf(addrStr.c_str(), "%x:%x:%x:%x:%x:%x", &parsed[0], &parsed[1], &parsed[2], &parsed[3], &parsed[4], &parsed[5]) == 6) {
+        for (int k = 0; k < 6; k++) mac[k] = (uint8_t)parsed[k];
       }
       int rssi = advertisedDevice.getRSSI();
       unsigned long now = millis();
@@ -768,6 +774,14 @@ void setup() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), 160, 128);
   delay(1200);
 
+  // Initialize BLE Scanner first before Wi-Fi promiscuous mode
+  BLEDevice::init("WIFIMON-V3");
+  pBLEScan = BLEDevice::getScan();
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyBLEAdvertisedDeviceCallbacks(), false);
+  pBLEScan->setActiveScan(true);
+  pBLEScan->setInterval(100);
+  pBLEScan->setWindow(99);
+
   // Initialize Wi-Fi Sniffer Mode
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -776,14 +790,6 @@ void setup() {
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
-
-  // Initialize BLE Scanner
-  BLEDevice::init("WIFIMON-V3");
-  pBLEScan = BLEDevice::getScan();
-  pBLEScan->setAdvertisedDeviceCallbacks(new MyBLEAdvertisedDeviceCallbacks(), false);
-  pBLEScan->setActiveScan(true);
-  pBLEScan->setInterval(100);
-  pBLEScan->setWindow(99);
 
   Serial.println("[SYSTEM] WIFIMON V3 Ready! 20s Wi-Fi / BLE Hybrid Cycle Active.");
 }
@@ -798,12 +804,18 @@ void loop() {
     lastRadarModeToggle = now;
 
     if (currentRadarMode == RADAR_BLE) {
+      Serial.println("[MODE] >>> Switched to Bluetooth BLE Radar View (20s) <<<");
       esp_wifi_set_promiscuous(false); // Pause Wi-Fi sniffer while scanning Bluetooth
       if (pBLEScan) {
-        pBLEScan->start(2, false); // Perform 2-second BLE scan
+        Serial.println("[BLE] Triggering 2-second BLE Scan...");
+        BLEScanResults* results = pBLEScan->start(2, false);
+        if (results) {
+          Serial.printf("[BLE] Scan complete! Sensed %d raw BLE devices.\r\n", results->getCount());
+        }
         pBLEScan->clearResults();
       }
     } else {
+      Serial.println("[MODE] >>> Switched to Wi-Fi 802.11 Radar View (20s) <<<");
       esp_wifi_set_promiscuous(true); // Resume Wi-Fi sniffer for Wi-Fi Radar mode
     }
   }
@@ -812,7 +824,11 @@ void loop() {
   static unsigned long lastBLEScanTrigger = 0;
   if (currentRadarMode == RADAR_BLE && (now - lastBLEScanTrigger > 3000)) {
     if (pBLEScan) {
-      pBLEScan->start(2, false);
+      Serial.println("[BLE] Refreshing 2-second BLE Scan...");
+      BLEScanResults* results = pBLEScan->start(2, false);
+      if (results) {
+        Serial.printf("[BLE] Scan complete! Sensed %d raw BLE devices.\r\n", results->getCount());
+      }
       pBLEScan->clearResults();
     }
     lastBLEScanTrigger = now;
