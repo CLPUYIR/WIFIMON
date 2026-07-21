@@ -703,7 +703,7 @@ void handleButton() {
   }
 }
 
-// --- Real-time Clock Functions ---
+// --- Real-time Clock & PuTTY Command Functions ---
 void handleSerial() {
   static String inputBuffer = "";
   while (Serial.available() > 0) {
@@ -720,7 +720,44 @@ void handleSerial() {
           rtcSec = s;
           lastTimeUpdateMillis = millis();
           clockSynced = true;
+          Serial.println("\n[CLOCK] Time successfully synced!");
         }
+      } else if (inputBuffer.equalsIgnoreCase("m 1") || inputBuffer.equalsIgnoreCase("m radar")) {
+        autoToggleMode = false;
+        currentMode = RADAR_MODE;
+        Serial.println("\n[UI] Switched to RADAR view");
+      } else if (inputBuffer.equalsIgnoreCase("m 2") || inputBuffer.equalsIgnoreCase("m clients") || inputBuffer.equalsIgnoreCase("m probes")) {
+        autoToggleMode = false;
+        currentMode = CLIENTS_MODE;
+        Serial.println("\n[UI] Switched to PROBES / CLIENTS view");
+      } else if (inputBuffer.equalsIgnoreCase("m 3") || inputBuffer.equalsIgnoreCase("m aps")) {
+        autoToggleMode = false;
+        currentMode = APS_MODE;
+        Serial.println("\n[UI] Switched to ACCESS POINTS view");
+      } else if (inputBuffer.equalsIgnoreCase("m 4") || inputBuffer.equalsIgnoreCase("m combined")) {
+        autoToggleMode = false;
+        currentMode = COMBINED_MODE;
+        Serial.println("\n[UI] Switched to COMBINED view");
+      } else if (inputBuffer.equalsIgnoreCase("m") || inputBuffer.equalsIgnoreCase("mode")) {
+        autoToggleMode = false;
+        if (currentMode == CLIENTS_MODE) currentMode = APS_MODE;
+        else if (currentMode == APS_MODE) currentMode = COMBINED_MODE;
+        else if (currentMode == COMBINED_MODE) currentMode = RADAR_MODE;
+        else currentMode = CLIENTS_MODE;
+        Serial.printf("\n[UI] Mode cycled to view #%d\n", (int)currentMode + 1);
+      } else if (inputBuffer.equalsIgnoreCase("auto")) {
+        autoToggleMode = !autoToggleMode;
+        Serial.printf("\n[UI] Auto-toggle: %s\n", autoToggleMode ? "ENABLED" : "DISABLED");
+      } else if (inputBuffer.equalsIgnoreCase("h") || inputBuffer.equalsIgnoreCase("?")) {
+        Serial.println("\n--- Serial View Switch Commands ---");
+        Serial.println("  m 1 or m radar    : Switch TFT to RADAR view");
+        Serial.println("  m 2 or m clients  : Switch TFT to PROBES view");
+        Serial.println("  m 3 or m aps      : Switch TFT to ACCESS POINTS view");
+        Serial.println("  m 4 or m combined : Switch TFT to COMBINED view");
+        Serial.println("  m or mode        : Cycle to next TFT view");
+        Serial.println("  auto             : Toggle auto-view switching on/off");
+        Serial.println("  TIME:HH:MM:SS    : Sync device time");
+        Serial.println("------------------------------------");
       }
       inputBuffer = "";
     } else if (c != '\r') {

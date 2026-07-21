@@ -86,19 +86,19 @@ Go to **Sketch > Include Library > Manage Libraries...** and search for and inst
     *   `Gray:` Weak/Fading signal (< -80 dBm)
     *   `Red (APs Mode):` Unencrypted/Vulnerable networks (`OPEN`/`WEP`).
 
-### Serial Monitor Debugging
-Set your Serial Monitor baud rate to **115200** to view detailed log outputs of discovered wireless clients and access points.
+### PuTTY / Serial Terminal View Controls
+Send commands over serial at **115200 baud** to switch TFT display views remotely:
 
-```text
-==========================================
-[SYSTEM] ESP32 Wi-Fi Cybersecurity Sniffer
-[SYSTEM] Diagnostic Serial Debug Mode: ACTIVE
-==========================================
-
-[CLIENT] DISCOVERED MAC: D8:A0:1D:XX:XX:XX | RSSI: -42 dBm | Vendor: Apple
-[AP] DISCOVERED BSSID: E0:5A:1B:XX:XX:XX | SSID: Home_Network    | CH: 6 | Enc: WPA2 | RSSI: -54 dBm
-[CLIENT] UPDATED    MAC: 30:AE:A4:XX:XX:XX | RSSI: -67 dBm | Probed SSID: Starbucks_WiFi
-```
+| Command | Action |
+| :--- | :--- |
+| `m 1` or `m radar` | Switch TFT screen to **Visual Radar Mode** |
+| `m 2` or `m clients` | Switch TFT screen to **Probes / Clients Mode** |
+| `m 3` or `m aps` | Switch TFT screen to **Access Points Mode** |
+| `m 4` or `m combined` | Switch TFT screen to **Combined Mode** |
+| `m` or `mode` | Cycle to the next TFT view |
+| `auto` | Toggle 5-second automatic mode cycling on/off |
+| `TIME:HH:MM:SS` | Manually sync device clock |
+| `h` or `?` | Show serial command help menu |
 
 ---
 
