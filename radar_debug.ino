@@ -641,6 +641,7 @@ void setup() {
   WiFi.disconnect();
   delay(100);
 
+  currentMode = RADAR_MODE;
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
@@ -1140,7 +1141,11 @@ void drawRadar() {
       item.rssi = trackedAPs[i].rssi;
       item.dist = pow(10.0f, (-40.0f - (float)item.rssi) / 27.0f);
       item.isAP = true;
-      snprintf(item.label, sizeof(item.label), "%02X%02X", item.mac[4], item.mac[5]);
+      if (strlen(trackedAPs[i].ssid) > 0) {
+        snprintf(item.label, sizeof(item.label), "%.6s", trackedAPs[i].ssid);
+      } else {
+        snprintf(item.label, sizeof(item.label), "%02X%02X", item.mac[4], item.mac[5]);
+      }
       item.color = FIX_YELLOW; // Yellow for Access Points
     }
   }
@@ -1153,7 +1158,12 @@ void drawRadar() {
       item.rssi = trackedClients[i].rssi;
       item.dist = pow(10.0f, (-40.0f - (float)item.rssi) / 27.0f);
       item.isAP = false;
-      snprintf(item.label, sizeof(item.label), "%02X%02X", item.mac[4], item.mac[5]);
+      if (strlen(trackedClients[i].probedSSID) > 0) {
+        snprintf(item.label, sizeof(item.label), "%.6s", trackedClients[i].probedSSID);
+      } else {
+        const char* vendor = getVendor(item.mac);
+        snprintf(item.label, sizeof(item.label), "%.6s", vendor);
+      }
       item.color = (item.rssi > -60) ? FIX_GREEN : ((item.rssi > -80) ? FIX_CYAN : FIX_RED);
     }
   }
